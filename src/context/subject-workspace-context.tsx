@@ -24,6 +24,7 @@ export type SubjectWorkspaceContextValue = {
   readyDocumentCount: number;
   selectDocument: (docId: string | null) => void;
   addDocumentFromFile: (file: File) => void;
+  retryDocumentAnalysis: (docId: string) => void;
   deleteDocument: (docId: string) => void;
   addMistake: (
     documentId: string,
@@ -112,6 +113,8 @@ function SubjectWorkspaceInner({
     readyDocumentCount,
     selectDocument: (docId) => ws.selectDocument(subjectId, docId),
     addDocumentFromFile: (file) => ws.addDocumentFromFile(subjectId, file),
+    retryDocumentAnalysis: (docId) =>
+      ws.retryDocumentAnalysis(subjectId, docId),
     deleteDocument: (docId) => ws.deleteDocument(subjectId, docId),
     addMistake: (documentId, m) => ws.addMistake(subjectId, documentId, m),
     removeMistakeForQuestion: (documentId, questionId) =>

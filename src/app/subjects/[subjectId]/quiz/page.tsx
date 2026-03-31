@@ -301,9 +301,18 @@ function SubjectQuizInner() {
         </p>
       ) : null}
       {selectedDocument.quizError ? (
-        <div className="rounded-lg border border-amber-300/80 bg-amber-50/90 px-3 py-2 text-xs text-amber-950 dark:border-amber-700/80 dark:bg-amber-950/40 dark:text-amber-100">
-          <span className="font-medium">Fallback quiz: </span>
-          {selectedDocument.quizError}
+        <div className="space-y-2 rounded-lg border border-amber-300/80 bg-amber-50/90 px-3 py-3 text-xs text-amber-950 dark:border-amber-700/80 dark:bg-amber-950/40 dark:text-amber-100">
+          <div className="rounded-md border border-emerald-300/60 bg-emerald-500/[0.08] px-2.5 py-2 text-emerald-950 dark:border-emerald-800/50 dark:bg-emerald-950/30 dark:text-emerald-100">
+            <p className="font-medium">Parsing succeeded</p>
+            <p className="mt-0.5 text-[11px] leading-relaxed opacity-90">
+              Your PDF text was extracted. The issue below is only with AI quiz
+              generation—you still have rule-based questions from the same text.
+            </p>
+          </div>
+          <p>
+            <span className="font-medium">Quiz generation failed · </span>
+            {selectedDocument.quizError}
+          </p>
         </div>
       ) : null}
 

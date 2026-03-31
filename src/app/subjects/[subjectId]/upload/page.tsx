@@ -9,6 +9,7 @@ import {
   FileText,
   ListChecks,
   Loader2,
+  RefreshCw,
   Trash2,
   UploadCloud,
   FileUp,
@@ -28,8 +29,63 @@ import { EmptyState } from "@/components/empty-state";
 import { cn } from "@/lib/utils";
 import { formatIsoDateLongEn } from "@/lib/dates";
 import type { StudyDocument } from "@/data/types";
+import { MAX_SUMMARY_INPUT_CHARS } from "@/lib/summary-api";
+import { MAX_QUIZ_INPUT_CHARS } from "@/lib/quiz-api";
+import {
+  MAX_EXTRACTED_TEXT_STORED,
+  MIN_EXTRACT_MEANINGFUL_CHARS,
+} from "@/lib/pdf-constants";
 
-/** Shown as soon as the server returns text — before summary/quiz are ready. */
+function errorStatusHeading(d: StudyDocument): string {
+  if (d.status !== "error") return "";
+  switch (d.pipelineFailureStage) {
+    case "pdf_parse":
+      return "PDF parsing failed";
+    case "empty_extract":
+      return "No extractable text";
+    case "unexpected":
+      return "Processing failed before save";
+    default:
+      return "Upload failed";
+  }
+}
+
+function canRetryAnalysis(d: StudyDocument, anyBusy: boolean): boolean {
+  if (anyBusy) return false;
+  if (!d.parseSucceeded || !d.extractedText.trim()) return false;
+  if (d.status === "uploading" || d.status === "analyzing") return false;
+  if (d.status === "error") return false;
+  if (d.extractTooShort) return false;
+  return !!(d.summaryError || d.quizError || d.errorMessage);
+}
+
+/** Confirms parse layer succeeded; separate from OpenAI success/failure. */
+function ParseSuccessBanner({ d }: { d: StudyDocument }) {
+  if (!d.parseSucceeded || !d.extractedText.trim()) return null;
+  if (d.status === "uploading" || d.status === "analyzing") return null;
+
+  const aiIssue = !!(
+    d.summaryError ||
+    d.quizError ||
+    d.errorMessage ||
+    d.extractTooShort
+  );
+
+  return (
+    <div className="border-t border-emerald-200/80 bg-emerald-500/[0.07] px-4 py-3 dark:border-emerald-900/50 dark:bg-emerald-950/25">
+      <p className="text-sm font-medium text-emerald-950 dark:text-emerald-100">
+        PDF parsing succeeded
+      </p>
+      <p className="mt-1 text-xs leading-relaxed text-emerald-900/90 dark:text-emerald-100/85">
+        {aiIssue
+          ? "Text extraction finished successfully. Anything marked as a failure below refers to the AI summary or quiz step—not the PDF parser."
+          : "Extracted text is saved and was used to build your materials."}
+      </p>
+    </div>
+  );
+}
+
+/** Shown as soon as the server returns text — before or after AI steps. */
 function ExtractedTextPreviewSection({ d }: { d: StudyDocument }) {
   const usesStructuredPreview = d.textPreview.length > 0;
   const preview = usesStructuredPreview
@@ -43,6 +99,10 @@ function ExtractedTextPreviewSection({ d }: { d: StudyDocument }) {
   const buildingMaterials = d.status === "analyzing" && d.parseSucceeded;
   const showMoreEllipsis =
     !usesStructuredPreview && d.extractedText.length > preview.length;
+  const aiPartial =
+    d.status === "ready" &&
+    !!(d.summaryError || d.quizError || d.errorMessage) &&
+    !d.extractTooShort;
 
   return (
     <div className="border-t border-border/60 bg-muted/20 px-4 py-4">
@@ -65,10 +125,21 @@ function ExtractedTextPreviewSection({ d }: { d: StudyDocument }) {
             <Loader2 className="size-3 animate-spin text-primary" />
             Building summary &amp; quiz from this text…
           </span>
-        ) : d.status === "ready" ? (
-          <Badge variant="default" className="text-[10px] font-normal">
-            Verified extract
+        ) : d.status === "error" && d.parseSucceeded ? (
+          <Badge variant="secondary" className="text-[10px] font-normal">
+            Extract saved · pipeline error
           </Badge>
+        ) : d.status === "ready" ? (
+          <div className="flex flex-wrap gap-1">
+            <Badge variant="default" className="text-[10px] font-normal">
+              Verified extract
+            </Badge>
+            {aiPartial ? (
+              <Badge variant="outline" className="text-[10px] font-normal">
+                AI: partial
+              </Badge>
+            ) : null}
+          </div>
         ) : null}
       </div>
       <p className="mb-2 text-xs text-muted-foreground leading-relaxed">
@@ -85,52 +156,181 @@ function ExtractedTextPreviewSection({ d }: { d: StudyDocument }) {
   );
 }
 
-/** Optional: extra parsing metadata (collapsed by default). */
+/** Pipeline + AI metadata for debugging (terminal logs complement this). */
 function ParseDebugPanel({ d }: { d: StudyDocument }) {
   const legacy = d.contentSource === "legacy-mock";
-  const showDetails =
-    legacy ||
+  const defaultOpen =
     d.status === "error" ||
-    (d.parseSucceeded &&
-      (d.textPreview.length > 0 || d.extractedText.length > 0));
+    !!d.pipelineErrorDetail ||
+    !!d.summaryError ||
+    !!d.quizError ||
+    !!d.errorMessage;
 
-  if (!showDetails && d.status !== "ready") return null;
+  const metaJson =
+    d.lastAnalysisMeta && Object.keys(d.lastAnalysisMeta).length > 0
+      ? JSON.stringify(d.lastAnalysisMeta, null, 2)
+      : null;
 
   return (
-    <details className="rounded-b-lg border-t border-border/50 bg-muted/10 text-sm">
+    <details
+      className="rounded-b-lg border-t border-border/50 bg-muted/10 text-sm"
+      open={defaultOpen}
+    >
       <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-muted-foreground select-none hover:text-foreground">
-        Technical details (parsing metadata)
+        Technical details
       </summary>
-      <div className="space-y-2 border-t border-border/40 px-4 py-3">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <dt className="font-medium text-foreground">Parsing</dt>
+      <div className="space-y-3 border-t border-border/40 px-4 py-3">
+        <dl className="grid grid-cols-[minmax(7rem,auto)_1fr] gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+          <dt className="font-medium text-foreground">Failure stage</dt>
           <dd>
-            {d.status === "error" ? (
-              <span className="text-destructive">Failed</span>
-            ) : d.parseSucceeded ? (
-              <span className="text-primary">Succeeded</span>
-            ) : legacy ? (
-              <span>Not stored (legacy materials)</span>
+            {d.status === "error" && d.pipelineFailureStage ? (
+              <span className="font-mono text-[11px] text-destructive">
+                {d.pipelineFailureStage}
+              </span>
+            ) : d.summaryError && !d.quizError ? (
+              <span className="text-amber-800 dark:text-amber-200/90">
+                summary_openai (quiz OK or not run yet)
+              </span>
+            ) : d.quizError && d.quizSource === "heuristic" ? (
+              <span className="text-amber-800 dark:text-amber-200/90">
+                quiz_openai → heuristic fallback
+              </span>
+            ) : d.extractTooShort ? (
+              <span className="text-amber-800 dark:text-amber-200/90">
+                low_extract (&lt; {MIN_EXTRACT_MEANINGFUL_CHARS} chars)
+              </span>
             ) : (
-              <span>Pending or unavailable</span>
+              <span className="text-muted-foreground">—</span>
             )}
           </dd>
-          <dt className="font-medium text-foreground">Pages</dt>
-          <dd>{d.pageCount != null ? d.pageCount : "—"}</dd>
-          <dt className="font-medium text-foreground">Characters</dt>
+          <dt className="font-medium text-foreground">PDF parse</dt>
           <dd>
+            {d.status === "error" && !d.parseSucceeded ? (
+              <span className="text-destructive">Failed</span>
+            ) : d.parseSucceeded ? (
+              <span className="text-emerald-700 dark:text-emerald-400">
+                Succeeded
+              </span>
+            ) : legacy ? (
+              <span>Not stored (legacy)</span>
+            ) : (
+              <span>Pending</span>
+            )}
+          </dd>
+          <dt className="font-medium text-foreground">Page count</dt>
+          <dd className="tabular-nums">
+            {d.pageCount != null ? d.pageCount : "—"}
+          </dd>
+          <dt className="font-medium text-foreground">Stored text length</dt>
+          <dd className="tabular-nums">
             {d.extractedText.length > 0
-              ? `${d.extractedText.length.toLocaleString()}${d.textTruncated ? " (truncated for storage)" : ""}`
+              ? `${d.extractedText.length.toLocaleString()} chars${
+                  d.textTruncated
+                    ? ` (storage cap ${MAX_EXTRACTED_TEXT_STORED.toLocaleString()})`
+                    : ""
+                }`
               : "—"}
+          </dd>
+          <dt className="font-medium text-foreground">Length at parse</dt>
+          <dd className="tabular-nums">
+            {d.extractLengthAtParse != null
+              ? `${d.extractLengthAtParse.toLocaleString()} chars (pre-storage trim)`
+              : "—"}
+          </dd>
+          <dt className="font-medium text-foreground">OpenAI input caps</dt>
+          <dd className="text-[11px] leading-snug">
+            Summary model ≤ {MAX_SUMMARY_INPUT_CHARS.toLocaleString()} chars· Quiz
+            model ≤ {MAX_QUIZ_INPUT_CHARS.toLocaleString()} chars (longer PDFs are
+            truncated for the request; full stored text is kept up to the storage
+            cap).
+          </dd>
+          <dt className="font-medium text-foreground">Readable threshold</dt>
+          <dd className="text-[11px]">
+            Below ~{MIN_EXTRACT_MEANINGFUL_CHARS} stored chars, AI summary is
+            skipped as likely non-text PDF.
+          </dd>
+          <dt className="font-medium text-foreground">Summary (OpenAI)</dt>
+          <dd>
+            {d.summaryError ? (
+              <span className="text-destructive">Failed or skipped</span>
+            ) : d.summarySource === "openai" ? (
+              <span className="text-emerald-700 dark:text-emerald-400">OK</span>
+            ) : (
+              <span>—</span>
+            )}
+          </dd>
+          <dt className="font-medium text-foreground">Quiz (OpenAI)</dt>
+          <dd>
+            {d.quizSource === "openai" ? (
+              <span className="text-emerald-700 dark:text-emerald-400">OK</span>
+            ) : d.quizSource === "heuristic" ? (
+              <span className="text-amber-800 dark:text-amber-200/90">
+                Heuristic fallback
+              </span>
+            ) : (
+              <span>—</span>
+            )}
           </dd>
           <dt className="font-medium text-foreground">Source</dt>
           <dd className="capitalize">{d.contentSource ?? "extracted"}</dd>
         </dl>
-        {d.parseErrorMessage || d.errorMessage ? (
-          <p className="rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
-            {d.parseErrorMessage ?? d.errorMessage}
-          </p>
+
+        {d.pipelineErrorDetail ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-2 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-destructive">
+              Underlying error (pipeline)
+            </p>
+            <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-destructive/95">
+              {d.pipelineErrorDetail}
+            </pre>
+          </div>
         ) : null}
+
+        {(d.parseErrorMessage || d.errorMessage) &&
+        d.parseErrorMessage !== d.pipelineErrorDetail ? (
+          <div className="rounded-md border border-border/80 bg-muted/30 px-2 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              User-facing / parse message
+            </p>
+            <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px]">
+              {d.parseErrorMessage ?? d.errorMessage}
+            </pre>
+          </div>
+        ) : null}
+
+        {d.summaryError ? (
+          <div className="rounded-md border border-border/80 bg-muted/30 px-2 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Summary error (exact)
+            </p>
+            <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px]">
+              {d.summaryError}
+            </pre>
+          </div>
+        ) : null}
+
+        {d.quizError ? (
+          <div className="rounded-md border border-border/80 bg-muted/30 px-2 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Quiz error / fallback note (exact)
+            </p>
+            <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px]">
+              {d.quizError}
+            </pre>
+          </div>
+        ) : null}
+
+        {metaJson ? (
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Last AI request meta
+            </p>
+            <pre className="mt-1 max-h-40 overflow-auto rounded-md border border-border/60 bg-background p-2 font-mono text-[10px] leading-relaxed">
+              {metaJson}
+            </pre>
+          </div>
+        ) : null}
+
         {legacy && !d.extractedText ? (
           <p className="text-xs text-amber-900/90 dark:text-amber-200/90">
             This file was saved before real PDF extraction. Summary and quiz are
@@ -147,6 +347,7 @@ export default function SubjectUploadPage() {
     subjectId,
     documents,
     addDocumentFromFile,
+    retryDocumentAnalysis,
     deleteDocument,
     selectDocument,
   } = useSubjectWorkspace();
@@ -169,7 +370,8 @@ export default function SubjectUploadPage() {
     <div className="space-y-8">
       <p className="text-sm text-muted-foreground leading-relaxed">
         PDFs are sent to this app’s server route to extract real text with{" "}
-        <code className="rounded bg-muted px-1 py-px text-xs">pdf-parse</code>.
+        <code className="rounded bg-muted px-1 py-px text-xs">pdfjs-dist</code>{" "}
+        (text-only extraction).
         Each document card shows a visible{" "}
         <span className="font-medium text-foreground">Extracted text preview</span>{" "}
         as soon as parsing succeeds, so you can confirm the right PDF before the
@@ -264,9 +466,24 @@ export default function SubjectUploadPage() {
                           <span className="ml-2">· {d.pageCount} pages</span>
                         ) : null}
                         {d.status === "ready" && d.parseSucceeded ? (
-                          <span className="ml-2 inline-flex items-center gap-1 text-primary">
+                          <span
+                            className={cn(
+                              "ml-2 inline-flex items-center gap-1",
+                              d.summaryError || d.quizError || d.errorMessage
+                                ? "text-amber-800 dark:text-amber-200/90"
+                                : "text-primary"
+                            )}
+                          >
                             <CheckCircle2 className="size-3.5" />
-                            Parsed &amp; ready
+                            {d.extractTooShort
+                              ? "Parsed · low text"
+                              : d.summaryError && d.quizError
+                                ? "Parsed · AI issues"
+                                : d.summaryError
+                                  ? "Parsed · summary issue"
+                                  : d.quizError
+                                    ? "Parsed · quiz fallback"
+                                    : "Parsed & ready"}
                           </span>
                         ) : d.status === "uploading" ||
                           d.status === "analyzing" ? (
@@ -277,7 +494,7 @@ export default function SubjectUploadPage() {
                         ) : d.status === "error" ? (
                           <span className="ml-2 inline-flex items-center gap-1 text-destructive">
                             <AlertTriangle className="size-3.5" />
-                            Parse or analysis failed
+                            {errorStatusHeading(d)}
                           </span>
                         ) : null}
                       </CardDescription>
@@ -286,14 +503,25 @@ export default function SubjectUploadPage() {
                       <Badge
                         variant={
                           d.status === "ready"
-                            ? "default"
+                            ? d.summaryError ||
+                                d.quizError ||
+                                d.errorMessage ||
+                                d.extractTooShort
+                              ? "secondary"
+                              : "default"
                             : d.status === "error"
                               ? "destructive"
                               : "secondary"
                         }
                         className="capitalize"
                       >
-                        {d.status}
+                        {d.status === "ready" &&
+                        (d.summaryError ||
+                          d.quizError ||
+                          d.errorMessage) &&
+                        !d.extractTooShort
+                          ? "ready · parse OK"
+                          : d.status}
                       </Badge>
                       {d.textTruncated ? (
                         <Badge variant="outline" className="text-[10px]">
@@ -302,14 +530,47 @@ export default function SubjectUploadPage() {
                       ) : null}
                     </div>
                   </CardHeader>
+                  <ParseSuccessBanner d={d} />
                   <ExtractedTextPreviewSection d={d} />
-                  <ParseDebugPanel d={d} />
-                  {d.status === "ready" && d.summaryError ? (
+                  {d.status === "ready" && d.errorMessage ? (
+                    <div className="border-t border-amber-300/80 bg-amber-50/70 px-4 py-3 dark:border-amber-800/50 dark:bg-amber-950/25">
+                      <p className="text-sm font-medium text-amber-950 dark:text-amber-100">
+                        Analysis interrupted (text was saved)
+                      </p>
+                      <p className="mt-1 text-xs text-amber-900/95 dark:text-amber-200/95 leading-relaxed">
+                        {d.errorMessage}
+                      </p>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Use <strong>Retry analysis</strong> to call OpenAI again
+                        without re-uploading.
+                      </p>
+                    </div>
+                  ) : null}
+                  {d.status === "ready" && d.extractTooShort && d.summaryError ? (
+                    <div className="border-t border-amber-300/80 bg-amber-50/80 px-4 py-3 dark:border-amber-800/50 dark:bg-amber-950/30">
+                      <p className="text-sm font-medium text-amber-950 dark:text-amber-100">
+                      Extract too short for reliable AI summary
+                      </p>
+                      <p className="mt-1 text-xs text-amber-900/95 dark:text-amber-200/95 leading-relaxed">
+                        {d.summaryError}
+                      </p>
+                      <p className="mt-2 text-xs text-muted-foreground leading-relaxed">
+                        This usually means the PDF is image-based (scanned), uses
+                        fonts that did not extract, or is nearly empty—not a missing
+                        API key. OCR is not enabled in this app.
+                      </p>
+                    </div>
+                  ) : null}
+                  {d.status === "ready" && d.summaryError && !d.extractTooShort ? (
                     <div className="border-t border-destructive/30 bg-destructive/5 px-4 py-3">
                       <p className="text-sm font-medium text-destructive">
-                        AI summary failed
+                        Parsing succeeded · summary generation failed
                       </p>
-                      <p className="mt-1 text-xs text-destructive/90 leading-relaxed">
+                      <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                        The PDF text above is fine. Only the OpenAI summary step
+                        failed.
+                      </p>
+                      <p className="mt-2 text-xs text-destructive/90 leading-relaxed">
                         {d.summaryError}
                       </p>
                       <p className="mt-2 text-xs text-muted-foreground leading-relaxed">
@@ -317,21 +578,28 @@ export default function SubjectUploadPage() {
                         <code className="rounded bg-muted px-1 py-px">OPENAI_API_KEY</code>{" "}
                         in{" "}
                         <code className="rounded bg-muted px-1 py-px">.env.local</code>
-                        , quotas, and network. The quiz step still runs separately
-                        (OpenAI or rule-based fallback from your PDF).
+                        , model name, quotas, and network. Open{" "}
+                        <span className="font-medium">Technical details</span> for
+                        the exact server error string.
                       </p>
                     </div>
                   ) : null}
                   {d.status === "ready" && d.quizError ? (
                     <div className="border-t border-amber-300/80 bg-amber-50/80 px-4 py-3 dark:border-amber-800/50 dark:bg-amber-950/30">
                       <p className="text-sm font-medium text-amber-950 dark:text-amber-100">
-                        Quiz used rule-based fallback
+                        Parsing succeeded · quiz generation failed
                       </p>
-                      <p className="mt-1 text-xs text-amber-900/95 dark:text-amber-200/95 leading-relaxed">
+                      <p className="mt-1 text-xs text-muted-foreground leading-relaxed dark:text-amber-100/80">
+                        Your PDF was read correctly. OpenAI could not build the
+                        quiz, so rule-based questions from the same extract are
+                        shown instead—they are still usable for revision.
+                      </p>
+                      <p className="mt-2 text-xs text-amber-900/95 dark:text-amber-200/95 leading-relaxed">
                         {d.quizError}
                       </p>
                     </div>
                   ) : null}
+                  <ParseDebugPanel d={d} />
                   {d.status === "ready" && d.summarySource === "openai" && d.summary ? (
                     <div className="border-t border-primary/20 bg-primary/5 px-4 py-2 text-center text-xs font-medium text-foreground">
                       Summary: generated from uploaded PDF content (OpenAI)
@@ -367,6 +635,18 @@ export default function SubjectUploadPage() {
                           <ListChecks className="size-3.5" />
                           Quiz
                         </Link>
+                        {canRetryAnalysis(d, anyBusy) ? (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="gap-1.5"
+                            onClick={() => retryDocumentAnalysis(d.id)}
+                          >
+                            <RefreshCw className="size-3.5" />
+                            Retry analysis
+                          </Button>
+                        ) : null}
                       </>
                     ) : null}
                     <Button

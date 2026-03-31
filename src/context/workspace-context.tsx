@@ -3,16 +3,12 @@
 import * as React from "react";
 import type {
   AppState,
-  CourseSummary,
   ExamConfig,
   MistakeRecord,
-  QuizContent,
-  QuizSource,
   SubjectAccent,
   SubjectIconId,
   SubjectWorkspace,
   StudyDocument,
-  SummarySource,
 } from "@/data/types";
 import {
   SAMPLE_MISTAKES,
@@ -23,7 +19,12 @@ import {
   buildQuizFromExtractedText,
   buildTextPreview,
 } from "@/lib/generate-from-text";
-import { MAX_EXTRACTED_TEXT_STORED, TEXT_PREVIEW_LENGTH } from "@/lib/pdf-constants";
+import { runOpenAiPipeline } from "@/lib/document-analysis";
+import {
+  MAX_EXTRACTED_TEXT_STORED,
+  MIN_EXTRACT_MEANINGFUL_CHARS,
+  TEXT_PREVIEW_LENGTH,
+} from "@/lib/pdf-constants";
 import {
   workspaceReducer,
   type WorkspaceAction,
@@ -56,6 +57,7 @@ type WorkspaceContextValue = {
     >
   ) => void;
   addDocumentFromFile: (subjectId: string, file: File) => void;
+  retryDocumentAnalysis: (subjectId: string, docId: string) => void;
   deleteDocument: (subjectId: string, docId: string) => void;
   selectDocument: (subjectId: string, docId: string | null) => void;
   addMistake: (
@@ -181,6 +183,13 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         const patchDocument = (patch: Partial<StudyDocument>) =>
           dispatch({ type: "UPDATE_DOCUMENT", subjectId, docId, patch });
 
+        let recoveredExtract = "";
+        let recoveredPreview = "";
+        let recoveredPages: number | null = null;
+        let recoveredTruncated = false;
+        let recoveredExtractTooShort = false;
+        let recoveredLengthAtParse: number | undefined;
+
         try {
           patchDocument({
             status: "analyzing",
@@ -195,24 +204,42 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             body: form,
           });
 
-          const payload = (await res.json()) as {
+          let payload: {
             ok?: boolean;
             text?: string;
             numPages?: number | null;
             error?: string;
+            textLength?: number;
           };
-
-          if (!res.ok || !payload.ok) {
-            const msg =
-              typeof payload.error === "string"
-                ? payload.error
-                : `Request failed (${res.status})`;
+          try {
+            payload = (await res.json()) as typeof payload;
+          } catch {
+            const detail = `Invalid JSON from parse-pdf (HTTP ${res.status}).`;
             patchDocument({
               status: "error",
               analysisStep: null,
               parseSucceeded: false,
-              parseErrorMessage: msg,
-              errorMessage: msg,
+              pipelineFailureStage: "pdf_parse",
+              pipelineErrorDetail: detail,
+              parseErrorMessage: detail,
+              errorMessage: `PDF parsing failed: ${detail}`,
+            });
+            return;
+          }
+
+          if (!res.ok || !payload.ok) {
+            const detail =
+              typeof payload.error === "string"
+                ? payload.error
+                : `Request failed (HTTP ${res.status})`;
+            patchDocument({
+              status: "error",
+              analysisStep: null,
+              parseSucceeded: false,
+              pipelineFailureStage: "pdf_parse",
+              pipelineErrorDetail: detail,
+              parseErrorMessage: detail,
+              errorMessage: `PDF parsing failed: ${detail}`,
             });
             return;
           }
@@ -220,16 +247,25 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           let text = String(payload.text ?? "").trim();
           const numPages =
             typeof payload.numPages === "number" ? payload.numPages : null;
+          const rawLen =
+            typeof payload.textLength === "number"
+              ? payload.textLength
+              : text.length;
 
           if (!text.length) {
             patchDocument({
               status: "error",
               analysisStep: null,
               parseSucceeded: false,
+              pipelineFailureStage: "empty_extract",
+              pipelineErrorDetail:
+                "PDF parser returned no text after trimming. Common causes: scanned pages (bitmaps only), incorrect password/encryption, or an empty file.",
               parseErrorMessage:
-                "No text could be extracted. The PDF may be image-only (scanned); OCR is not enabled in this build.",
-              errorMessage: "No extractable text",
+                "No text could be extracted. This PDF may be image-only (scanned) or not machine-readable—OCR is not enabled in this build.",
+              errorMessage:
+                "No extractable text: PDF may be image-based or not machine-readable.",
               pageCount: numPages,
+              extractLengthAtParse: 0,
               textPreview: "",
               extractedText: "",
             });
@@ -243,9 +279,17 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           }
 
           const textPreview = buildTextPreview(text, TEXT_PREVIEW_LENGTH);
+          const extractTooShort = text.length < MIN_EXTRACT_MEANINGFUL_CHARS;
+
+          recoveredExtract = text;
+          recoveredPreview = textPreview;
+          recoveredPages = numPages;
+          recoveredTruncated = textTruncated;
+          recoveredExtractTooShort = extractTooShort;
+          recoveredLengthAtParse = rawLen;
 
           patchDocument({
-            analysisStep: "Generating study summary with AI…",
+            analysisStep: "Running AI summary and quiz…",
             extractedText: text,
             textPreview,
             pageCount: numPages,
@@ -254,114 +298,153 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             textTruncated,
             errorMessage: undefined,
             summaryError: undefined,
-          });
-
-          let summary: CourseSummary | null = null;
-          let summarySource: SummarySource | undefined;
-          let summaryError: string | undefined;
-
-          try {
-            const summaryRes = await fetch("/api/analyze-summary", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                text,
-                documentTitle: file.name,
-                pageCount: numPages,
-                textWasClipped: textTruncated,
-              }),
-            });
-
-            const summaryPayload = (await summaryRes.json()) as {
-              ok?: boolean;
-              summary?: CourseSummary;
-              error?: string;
-            };
-
-            if (
-              summaryRes.ok &&
-              summaryPayload.ok &&
-              summaryPayload.summary
-            ) {
-              summary = summaryPayload.summary;
-              summarySource = "openai";
-            } else {
-              summaryError =
-                typeof summaryPayload.error === "string"
-                  ? summaryPayload.error
-                  : `Summary API failed (${summaryRes.status})`;
-            }
-          } catch (e) {
-            summaryError =
-              e instanceof Error ? e.message : "Summary request failed";
-          }
-
-          patchDocument({
-            analysisStep: "Generating practice quiz with AI…",
             quizError: undefined,
+            extractTooShort,
+            extractLengthAtParse: rawLen,
+            pipelineFailureStage: undefined,
+            pipelineErrorDetail: undefined,
+            lastAnalysisMeta: undefined,
           });
 
-          let quiz: QuizContent;
-          let quizSource: QuizSource;
-          let quizError: string | undefined;
-
-          try {
-            const quizRes = await fetch("/api/analyze-quiz", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                text,
-                documentTitle: file.name,
-                documentId: docId,
-                subjectId,
-                pageCount: numPages,
-                textWasClipped: textTruncated,
-              }),
-            });
-
-            const quizPayload = (await quizRes.json()) as {
-              ok?: boolean;
-              quiz?: QuizContent;
-              error?: string;
-            };
-
-            if (quizRes.ok && quizPayload.ok && quizPayload.quiz) {
-              quiz = quizPayload.quiz;
-              quizSource = "openai";
-            } else {
-              throw new Error(
-                typeof quizPayload.error === "string"
-                  ? quizPayload.error
-                  : `Quiz API failed (${quizRes.status})`
-              );
-            }
-          } catch (e) {
-            quiz = buildQuizFromExtractedText(text, docId);
-            quizSource = "heuristic";
-            const detail =
-              e instanceof Error ? e.message : "Quiz AI request failed";
-            quizError = `AI quiz generation did not complete. Using rule-based questions derived only from this PDF’s text. ${detail}`;
-          }
+          const ai = await runOpenAiPipeline({
+            text,
+            documentId: docId,
+            subjectId,
+            documentTitle: file.name,
+            pageCount: numPages,
+            textWasClippedForStorage: textTruncated,
+          });
 
           patchDocument({
             status: "ready",
             analysisStep: null,
-            summary,
-            quiz,
+            summary: ai.summary,
+            quiz: ai.quiz,
             contentSource: "extracted",
-            summarySource,
-            summaryError,
-            quizSource,
-            quizError,
+            summarySource: ai.summarySource,
+            summaryError: ai.summaryError,
+            quizSource: ai.quizSource,
+            quizError: ai.quizError,
+            extractTooShort,
+            extractLengthAtParse: rawLen,
+            lastAnalysisMeta: ai.meta,
+            pipelineFailureStage: undefined,
+            pipelineErrorDetail: undefined,
+            errorMessage: undefined,
           });
         } catch (e) {
           const msg = e instanceof Error ? e.message : "Unexpected error";
+          if (recoveredExtract.length > 0) {
+            const fallbackQuiz = buildQuizFromExtractedText(
+              recoveredExtract,
+              docId
+            );
+            patchDocument({
+              status: "ready",
+              analysisStep: null,
+              parseSucceeded: true,
+              extractedText: recoveredExtract,
+              textPreview:
+                recoveredPreview ||
+                buildTextPreview(recoveredExtract, TEXT_PREVIEW_LENGTH),
+              pageCount: recoveredPages,
+              textTruncated: recoveredTruncated,
+              extractTooShort: recoveredExtractTooShort,
+              extractLengthAtParse: recoveredLengthAtParse,
+              pipelineFailureStage: "unexpected",
+              pipelineErrorDetail: msg,
+              errorMessage: `Analysis interrupted after text extraction: ${msg}`,
+              summary: null,
+              quiz: fallbackQuiz,
+              contentSource: "extracted",
+              summarySource: undefined,
+              quizSource: "heuristic",
+              summaryError: `OpenAI summary step did not finish: ${msg}. You can retry analysis; extracted text is saved.`,
+              quizError: `OpenAI quiz step did not finish: ${msg}. Showing rule-based quiz from extracted text. Retry to call the API again.`,
+              lastAnalysisMeta: undefined,
+            });
+          } else {
+            patchDocument({
+              status: "error",
+              analysisStep: null,
+              parseSucceeded: false,
+              pipelineFailureStage: "unexpected",
+              pipelineErrorDetail: msg,
+              parseErrorMessage: msg,
+              errorMessage: msg,
+            });
+          }
+        }
+      })();
+    },
+    []
+  );
+
+  const retryDocumentAnalysis = React.useCallback(
+    (subjectId: string, docId: string) => {
+      const sub = findSubject(stateRef.current, subjectId);
+      const existing = sub?.documents.find((d) => d.id === docId);
+      if (!existing?.parseSucceeded || !existing.extractedText.trim()) {
+        console.warn(
+          "[reviseflow] retryDocumentAnalysis: need a successful extract first"
+        );
+        return;
+      }
+
+      void (async () => {
+        const patchDocument = (patch: Partial<StudyDocument>) =>
+          dispatch({ type: "UPDATE_DOCUMENT", subjectId, docId, patch });
+
+        const text = existing.extractedText;
+        const textTruncated = Boolean(existing.textTruncated);
+        const numPages = existing.pageCount ?? null;
+
+        try {
           patchDocument({
-            status: "error",
+            status: "analyzing",
+            analysisStep: "Re-running AI summary and quiz…",
+            summaryError: undefined,
+            quizError: undefined,
+            pipelineFailureStage: undefined,
+            pipelineErrorDetail: undefined,
+            errorMessage: undefined,
+            parseErrorMessage: undefined,
+          });
+
+          const ai = await runOpenAiPipeline({
+            text,
+            documentId: docId,
+            subjectId,
+            documentTitle: existing.fileName,
+            pageCount: numPages,
+            textWasClippedForStorage: textTruncated,
+          });
+
+          patchDocument({
+            status: "ready",
             analysisStep: null,
-            parseSucceeded: false,
-            parseErrorMessage: msg,
-            errorMessage: msg,
+            summary: ai.summary,
+            quiz: ai.quiz,
+            summarySource: ai.summarySource,
+            summaryError: ai.summaryError,
+            quizSource: ai.quizSource,
+            quizError: ai.quizError,
+            lastAnalysisMeta: ai.meta,
+            extractTooShort:
+              text.length < MIN_EXTRACT_MEANINGFUL_CHARS,
+            pipelineFailureStage: undefined,
+            pipelineErrorDetail: undefined,
+            errorMessage: undefined,
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Retry failed";
+          patchDocument({
+            status: "ready",
+            analysisStep: null,
+            pipelineFailureStage: "unexpected",
+            pipelineErrorDetail: msg,
+            errorMessage: `Retry failed: ${msg}`,
+            summaryError: `Retry interrupted: ${msg}`,
           });
         }
       })();
@@ -476,6 +559,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       deleteSubject,
       updateSubject,
       addDocumentFromFile,
+      retryDocumentAnalysis,
       deleteDocument,
       selectDocument,
       addMistake,
@@ -494,6 +578,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       deleteSubject,
       updateSubject,
       addDocumentFromFile,
+      retryDocumentAnalysis,
       deleteDocument,
       selectDocument,
       addMistake,

@@ -111,6 +111,12 @@ export type SummarySource = "openai" | "heuristic" | "legacy-mock";
 /** Where the quiz question set came from. */
 export type QuizSource = "openai" | "heuristic" | "legacy-mock";
 
+/** Which pipeline step failed when `status === "error"` (or last fatal step). */
+export type DocumentPipelineFailureStage =
+  | "pdf_parse"
+  | "empty_extract"
+  | "unexpected";
+
 /** One uploaded PDF and its generated materials. */
 export interface StudyDocument {
   id: string;
@@ -141,6 +147,28 @@ export interface StudyDocument {
   quizSource?: QuizSource;
   /** Set when OpenAI quiz failed and heuristic fallback was used (or other quiz issues). */
   quizError?: string;
+  /**
+   * When `status === "error"`, identifies the step. `unexpected` = uncaught error before/during AI.
+   */
+  pipelineFailureStage?: DocumentPipelineFailureStage;
+  /** Raw or detailed message for debugging (HTTP body, stack message, etc.). */
+  pipelineErrorDetail?: string;
+  /** True when extract length is below MIN_EXTRACT_MEANINGFUL_CHARS but non-empty. */
+  extractTooShort?: boolean;
+  /** Character length of extract right after PDF parse (before storage cap). */
+  extractLengthAtParse?: number;
+  /** Last OpenAI request metadata (input size, truncation) for technical details. */
+  lastAnalysisMeta?: {
+    summaryInputChars?: number;
+    summarySentToModel?: number;
+    summaryTotalExtractChars?: number;
+    summaryTruncated?: boolean;
+    summarySkippedReason?: string;
+    quizInputChars?: number;
+    quizSentToModel?: number;
+    quizTotalExtractChars?: number;
+    quizTruncated?: boolean;
+  };
 }
 
 /**

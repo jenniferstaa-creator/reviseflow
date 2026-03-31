@@ -41,9 +41,15 @@ export function DocumentSelector({
           <option key={d.id} value={d.id}>
             {d.fileName}
             {d.status === "ready"
-              ? ""
+              ? d.quizError && d.quizSource === "heuristic"
+                ? " (quiz: fallback)"
+                : d.summaryError
+                  ? " (summary: failed)"
+                  : ""
               : d.status === "error"
-                ? " (failed)"
+                ? d.parseSucceeded
+                  ? " (parse OK · error)"
+                  : " (failed)"
                 : " (processing)"}
           </option>
         ))}

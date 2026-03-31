@@ -81,18 +81,66 @@ export default function SubjectSummaryPage() {
   }
 
   if (selectedDocument.summaryError && !summary) {
+    const raw = selectedDocument.extractedText?.trim() ?? "";
+    const hasExtract =
+      selectedDocument.parseSucceeded && raw.length > 0;
+
     return (
       <div className="space-y-4">
         <DocumentSelector />
-        <EmptyState
-          icon={BookMarked}
-          title="Summary could not be generated"
-          description={selectedDocument.summaryError}
-        >
+        {hasExtract ? (
+          <div className="rounded-lg border border-emerald-200/80 bg-emerald-500/[0.07] px-4 py-3 dark:border-emerald-900/50 dark:bg-emerald-950/25">
+            <p className="text-sm font-medium text-emerald-950 dark:text-emerald-100">
+              PDF parsing succeeded
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-emerald-900/90 dark:text-emerald-100/85">
+              Text from your PDF is available below. The failure below applies
+              only to the OpenAI summary—not to extraction.
+            </p>
+          </div>
+        ) : null}
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
+          <p className="text-sm font-medium text-destructive">
+            {hasExtract
+              ? "Parsing succeeded · summary generation failed"
+              : "Summary could not be generated"}
+          </p>
+          <p className="mt-1 text-xs text-destructive/90 leading-relaxed">
+            {selectedDocument.summaryError}
+          </p>
+        </div>
+        {hasExtract ? (
+          <div className="rounded-xl border border-border/80 bg-card shadow-sm">
+            <div className="border-b border-border/60 px-4 py-3">
+              <p className="text-sm font-medium text-foreground">
+                Extracted text (fallback)
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {raw.length.toLocaleString()} characters stored · open{" "}
+                <span className="font-medium">Files &amp; upload</span> for
+                full debugging
+              </p>
+            </div>
+            <ScrollArea className="h-[min(420px,55vh)]">
+              <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed text-foreground/90">
+                {raw.length > 14_000
+                  ? `${raw.slice(0, 14_000)}\n\n… (truncated in this view)`
+                  : raw}
+              </pre>
+            </ScrollArea>
+          </div>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
           <Link href={`${base}/upload`} className={cn(buttonVariants())}>
-            Back to files & upload
+            Files &amp; upload
           </Link>
-        </EmptyState>
+          <Link
+            href={`${base}/quiz`}
+            className={cn(buttonVariants({ variant: "outline" }))}
+          >
+            Practice quiz
+          </Link>
+        </div>
       </div>
     );
   }

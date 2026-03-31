@@ -6,6 +6,23 @@ import { MAX_QUIZ_INPUT_CHARS } from "@/lib/quiz-api";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
+const STAGE = "openai_quiz" as const;
+
+function logQuizError(context: string, err: unknown, extra?: object) {
+  const message =
+    err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+  console.error("[reviseflow:analyze-quiz]", context, {
+    stage: STAGE,
+    ...extra,
+    message,
+    stack: err instanceof Error ? err.stack : undefined,
+  });
+}
+
+function quizJson(data: Record<string, unknown>, status = 200) {
+  return NextResponse.json({ ...data, stage: STAGE }, { status });
+}
+
 type AiMcq = {
   question: string;
   options: string[];
@@ -117,67 +134,75 @@ function normalizeQuiz(
 }
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey?.trim()) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error:
-          "OPENAI_API_KEY is missing. Add it to .env.local and restart the dev server.",
-      },
-      { status: 503 }
-    );
-  }
-
-  let body: {
-    text?: string;
-    documentTitle?: string;
-    documentId?: string;
-    subjectId?: string;
-    pageCount?: number | null;
-    textWasClipped?: boolean;
-  };
-
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json(
-      { ok: false, error: "Invalid JSON body." },
-      { status: 400 }
-    );
-  }
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey?.trim()) {
+      logQuizError("config", "OPENAI_API_KEY missing");
+      return quizJson(
+        {
+          ok: false,
+          error:
+            "OPENAI_API_KEY is missing. Add it to .env.local and restart the dev server.",
+        },
+        503
+      );
+    }
 
-  const rawText = typeof body.text === "string" ? body.text.trim() : "";
-  if (!rawText.length) {
-    return NextResponse.json(
-      { ok: false, error: "No text provided for quiz generation." },
-      { status: 400 }
-    );
-  }
+    let body: {
+      text?: string;
+      documentTitle?: string;
+      documentId?: string;
+      subjectId?: string;
+      pageCount?: number | null;
+      textWasClipped?: boolean;
+    };
 
-  const documentId =
-    typeof body.documentId === "string" && body.documentId.trim()
-      ? body.documentId.trim()
-      : "doc";
+    try {
+      body = await req.json();
+    } catch (jsonErr) {
+      logQuizError("request_json", jsonErr);
+      return quizJson({ ok: false, error: "Invalid JSON body." }, 400);
+    }
 
-  const documentTitle =
-    typeof body.documentTitle === "string" && body.documentTitle.trim()
-      ? body.documentTitle.trim()
-      : "document.pdf";
+    const rawText = typeof body.text === "string" ? body.text.trim() : "";
+    if (!rawText.length) {
+      return quizJson(
+        { ok: false, error: "No text provided for quiz generation." },
+        400
+      );
+    }
 
-  const subjectId =
-    typeof body.subjectId === "string" && body.subjectId.trim()
-      ? body.subjectId.trim()
-      : "subject";
+    const documentId =
+      typeof body.documentId === "string" && body.documentId.trim()
+        ? body.documentId.trim()
+        : "doc";
 
-  const clipped =
-    rawText.length > MAX_QUIZ_INPUT_CHARS || Boolean(body.textWasClipped);
-  const textForModel = rawText.slice(0, MAX_QUIZ_INPUT_CHARS);
+    const documentTitle =
+      typeof body.documentTitle === "string" && body.documentTitle.trim()
+        ? body.documentTitle.trim()
+        : "document.pdf";
 
-  const extractLen = textForModel.length;
-  const { mcq: targetMcq, sa: targetSa } = minQuizCounts(extractLen);
+    const subjectId =
+      typeof body.subjectId === "string" && body.subjectId.trim()
+        ? body.subjectId.trim()
+        : "subject";
 
-  const system = `You are an expert university instructor writing revision quizzes for exams.
+    console.info("[reviseflow:analyze-quiz]", {
+      stage: STAGE,
+      msg: "request",
+      documentId,
+      documentTitle,
+      extractChars: rawText.length,
+    });
+
+    const clipped =
+      rawText.length > MAX_QUIZ_INPUT_CHARS || Boolean(body.textWasClipped);
+    const textForModel = rawText.slice(0, MAX_QUIZ_INPUT_CHARS);
+
+    const extractLen = textForModel.length;
+    const { mcq: targetMcq, sa: targetSa } = minQuizCounts(extractLen);
+
+    const system = `You are an expert university instructor writing revision quizzes for exams.
 You receive plain text from ONE uploaded PDF. Every question, option, and model answer must be grounded ONLY in that text—no outside facts, no generic “any course” filler.
 
 ## What to prioritize (in order)
@@ -205,12 +230,12 @@ Return ONLY a single JSON object (no markdown) with exactly these keys:
   - explanation: string (what an examiner looks for; mark scheme style)
   - conceptTag: string`;
 
-  const userPrefix =
-    clipped || textForModel.length < rawText.length
-      ? `NOTE: Extract may be truncated to the first ${MAX_QUIZ_INPUT_CHARS.toLocaleString()} characters.\n\n`
-      : "";
+    const userPrefix =
+      clipped || textForModel.length < rawText.length
+        ? `NOTE: Extract may be truncated to the first ${MAX_QUIZ_INPUT_CHARS.toLocaleString()} characters.\n\n`
+        : "";
 
-  const userMessage = `${userPrefix}CONTEXT FOR YOUR OUTPUT ONLY (do not invent other files):
+    const userMessage = `${userPrefix}CONTEXT FOR YOUR OUTPUT ONLY (do not invent other files):
 - subjectWorkspaceId: ${subjectId}
 - documentId: ${documentId}
 - fileName: ${documentTitle}
@@ -222,74 +247,114 @@ EXTRACTED TEXT:
 
 ${textForModel}`;
 
-  try {
-    const client = new OpenAI({ apiKey });
-
-    const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_QUIZ_MODEL?.trim() || "gpt-4o-mini",
-      temperature: 0.4,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: userMessage },
-      ],
-    });
-
-    const raw = completion.choices[0]?.message?.content?.trim();
-    if (!raw) {
-      return NextResponse.json(
-        { ok: false, error: "Empty response from model." },
-        { status: 502 }
-      );
-    }
-
-    let parsed: unknown;
     try {
-      parsed = JSON.parse(raw) as unknown;
-    } catch {
-      return NextResponse.json(
-        { ok: false, error: "Model did not return valid JSON." },
-        { status: 502 }
-      );
-    }
+      const client = new OpenAI({ apiKey });
 
-    if (!isAiQuizJson(parsed)) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error:
-            "Model JSON did not match the quiz schema (need MCQ with 4 options each, plus short answers).",
-        },
-        { status: 502 }
-      );
-    }
+      const completion = await client.chat.completions.create({
+        model: process.env.OPENAI_QUIZ_MODEL?.trim() || "gpt-4o-mini",
+        temperature: 0.4,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: userMessage },
+        ],
+      });
 
-    const { mcq: needMcq, sa: needSa } = minQuizCounts(extractLen);
-    const quiz = normalizeQuiz(parsed, documentId, extractLen);
-    if (!quiz) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: `Model output failed validation (need at least ${needMcq} MCQ and ${needSa} short items for this extract length, 4 distinct options per MCQ, and correctAnswer matching an option).`,
-        },
-        { status: 502 }
-      );
-    }
+      const raw = completion.choices[0]?.message?.content?.trim();
+      if (!raw) {
+        logQuizError("model", "empty completion content", { documentId });
+        return quizJson({ ok: false, error: "Empty response from model." }, 502);
+      }
 
-    return NextResponse.json({
-      ok: true,
-      quiz,
-      meta: {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw) as unknown;
+      } catch (parseErr) {
+        logQuizError("model", parseErr, {
+          documentId,
+          snippet: raw.slice(0, 200),
+        });
+        return quizJson(
+          { ok: false, error: "Model did not return valid JSON." },
+          502
+        );
+      }
+
+      if (!isAiQuizJson(parsed)) {
+        logQuizError("validation", "quiz JSON schema mismatch", {
+          documentId,
+        });
+        return quizJson(
+          {
+            ok: false,
+            error:
+              "Model JSON did not match the quiz schema (need MCQ with 4 options each, plus short answers).",
+          },
+          502
+        );
+      }
+
+      const { mcq: needMcq, sa: needSa } = minQuizCounts(extractLen);
+      const quiz = normalizeQuiz(parsed, documentId, extractLen);
+      if (!quiz) {
+        logQuizError("validation", "normalizeQuiz returned null", {
+          documentId,
+          needMcq,
+          needSa,
+        });
+        return quizJson(
+          {
+            ok: false,
+            error: `Model output failed validation (need at least ${needMcq} MCQ and ${needSa} short items for this extract length, 4 distinct options per MCQ, and correctAnswer matching an option).`,
+          },
+          502
+        );
+      }
+
+      console.info("[reviseflow:analyze-quiz]", {
+        stage: STAGE,
+        msg: "ok",
         documentId,
-        subjectId,
         documentTitle,
+        mcq: quiz.multipleChoice.length,
+        short: quiz.shortAnswer.length,
         inputChars: textForModel.length,
-        clipped,
-      },
-    });
+      });
+
+      return quizJson({
+        ok: true,
+        quiz,
+        meta: {
+          documentId,
+          subjectId,
+          documentTitle,
+          inputChars: textForModel.length,
+          totalExtractChars: rawText.length,
+          clipped: clipped || textForModel.length < rawText.length,
+        },
+      });
+    } catch (e) {
+      const message =
+        e instanceof Error
+          ? e.message
+          : "OpenAI quiz request failed unexpectedly.";
+      logQuizError("openai", e, { documentId });
+      return quizJson({ ok: false, error: message }, 502);
+    }
   } catch (e) {
     const message =
-      e instanceof Error ? e.message : "OpenAI quiz request failed unexpectedly.";
-    return NextResponse.json({ ok: false, error: message }, { status: 502 });
+      e instanceof Error ? e.message : String(e ?? "unknown error");
+    logQuizError("fatal_unhandled", e, {
+      hint: "Unhandled exception in analyze-quiz POST (not OpenAI-specific).",
+    });
+    return quizJson(
+      {
+        ok: false,
+        error: `Quiz route failed: ${message}`,
+        detail:
+          "Check server logs for [reviseflow:analyze-quiz] fatal_unhandled (stage: openai_quiz).",
+      },
+      500
+    );
   }
 }
