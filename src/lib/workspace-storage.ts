@@ -3,7 +3,12 @@
  * TODO(DB): replace with API + IndexedDB for large payloads; keep shapes compatible.
  */
 
-import type { AppState, SubjectWorkspace } from "@/data/types";
+import type {
+  AppState,
+  DocumentContentSource,
+  SubjectWorkspace,
+  SummarySource,
+} from "@/data/types";
 
 export const WORKSPACE_STORAGE_KEY = "reviseflow-workspace-v1";
 
@@ -55,12 +60,41 @@ export function saveWorkspaceState(state: AppState): void {
 function migrateIfNeeded(state: AppState): AppState {
   const subjects = state.subjects.map((s) => ({
     ...s,
-    documents: (s.documents ?? []).map((d) => ({
-      ...d,
-      analysisStep: d.analysisStep ?? null,
-      summary: d.summary ?? null,
-      quiz: d.quiz ?? null,
-    })),
+    documents: (s.documents ?? []).map((d) => {
+      const hasText = ((d as StudyDocumentCompat).extractedText ?? "").length > 0;
+      const hadMockMaterials =
+        (d.summary != null || d.quiz != null) && !hasText;
+      return {
+        ...d,
+        analysisStep: d.analysisStep ?? null,
+        summary: d.summary ?? null,
+        quiz: d.quiz ?? null,
+        extractedText: (d as StudyDocumentCompat).extractedText ?? "",
+        textPreview: (d as StudyDocumentCompat).textPreview ?? "",
+        pageCount: (d as StudyDocumentCompat).pageCount ?? null,
+        parseSucceeded:
+          typeof (d as StudyDocumentCompat).parseSucceeded === "boolean"
+            ? (d as StudyDocumentCompat).parseSucceeded!
+            : hasText,
+        parseErrorMessage: (d as StudyDocumentCompat).parseErrorMessage,
+        textTruncated: (d as StudyDocumentCompat).textTruncated,
+        contentSource: ((): DocumentContentSource | undefined => {
+          const c = (d as StudyDocumentCompat).contentSource;
+          if (c === "legacy-mock" || c === "extracted") return c;
+          return hadMockMaterials ? "legacy-mock" : "extracted";
+        })(),
+        summarySource: ((): SummarySource | undefined => {
+          const s = (d as StudyDocumentCompat).summarySource;
+          if (s === "openai" || s === "heuristic" || s === "legacy-mock") {
+            return s;
+          }
+          if (hadMockMaterials) return "legacy-mock";
+          if (hasText && d.summary) return "heuristic";
+          return undefined;
+        })(),
+        summaryError: (d as StudyDocumentCompat).summaryError,
+      };
+    }),
     mistakes: (s.mistakes ?? []).map((m) => ({
       ...m,
       documentId:
@@ -77,6 +111,18 @@ function migrateIfNeeded(state: AppState): AppState {
 }
 
 type MistakeRecordCompat = { documentId?: string };
+
+type StudyDocumentCompat = {
+  extractedText?: string;
+  textPreview?: string;
+  pageCount?: number | null;
+  parseSucceeded?: boolean;
+  parseErrorMessage?: string;
+  textTruncated?: boolean;
+  contentSource?: string;
+  summarySource?: string;
+  summaryError?: string;
+};
 
 export function findSubject(
   state: AppState,

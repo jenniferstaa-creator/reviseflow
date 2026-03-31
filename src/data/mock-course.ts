@@ -167,17 +167,6 @@ export const MOCK_QUIZ: QuizContent = {
   ],
 };
 
-/** Independent copy for each uploaded PDF (avoids shared object references in state). */
-export function mockArtifactsForNewDocument(): {
-  summary: CourseSummary;
-  quiz: QuizContent;
-} {
-  return {
-    summary: structuredClone(MOCK_SUMMARY),
-    quiz: structuredClone(MOCK_QUIZ),
-  };
-}
-
 /** Sample mistakes for optional demo seeding (partial notebook state). */
 export const SAMPLE_MISTAKES: MistakeRecord[] = [
   {

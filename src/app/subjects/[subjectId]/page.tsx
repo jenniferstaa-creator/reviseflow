@@ -144,9 +144,17 @@ export default function SubjectOverviewPage() {
                   key={d.id}
                   className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2.5 text-sm"
                 >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <FileStack className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="truncate font-medium">{d.fileName}</span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <FileStack className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate font-medium">{d.fileName}</span>
+                    </div>
+                    {d.pageCount != null && d.parseSucceeded ? (
+                      <p className="mt-0.5 pl-6 text-[11px] text-muted-foreground">
+                        {d.pageCount} pages extracted ·{" "}
+                        {d.extractedText.length.toLocaleString()} chars
+                      </p>
+                    ) : null}
                   </div>
                   <Badge
                     variant={d.status === "ready" ? "default" : "secondary"}

@@ -8,10 +8,19 @@ export function DocumentSelector({
 }: {
   className?: string;
 }) {
-  const { documents, selectedDocumentId, selectDocument } = useSubjectWorkspace();
+  const { documents, selectedDocumentId, selectDocument } =
+    useSubjectWorkspace();
   const ready = documents.filter((d) => d.status === "ready");
+  const selected = documents.find((d) => d.id === selectedDocumentId);
+  const pendingSelected =
+    selected &&
+    selected.status !== "ready" &&
+    !ready.some((r) => r.id === selected.id)
+      ? [selected]
+      : [];
+  const options = [...pendingSelected, ...ready];
 
-  if (ready.length === 0) return null;
+  if (options.length === 0) return null;
 
   return (
     <label className={cn("flex flex-col gap-1", className)}>
@@ -25,10 +34,17 @@ export function DocumentSelector({
           selectDocument(e.target.value === "" ? null : e.target.value)
         }
       >
-        {ready.length > 1 ? <option value="">Choose a document…</option> : null}
-        {ready.map((d) => (
+        {ready.length > 1 || pendingSelected.length > 0 ? (
+          <option value="">Choose a document…</option>
+        ) : null}
+        {options.map((d) => (
           <option key={d.id} value={d.id}>
             {d.fileName}
+            {d.status === "ready"
+              ? ""
+              : d.status === "error"
+                ? " (failed)"
+                : " (processing)"}
           </option>
         ))}
       </select>

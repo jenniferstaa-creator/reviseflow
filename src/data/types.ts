@@ -100,6 +100,12 @@ export interface SpacedRepetitionItem {
   strength: number;
 }
 
+/** How study materials were produced (for migration + debugging). */
+export type DocumentContentSource = "extracted" | "legacy-mock";
+
+/** Where the structured summary came from. */
+export type SummarySource = "openai" | "heuristic" | "legacy-mock";
+
 /** One uploaded PDF and its generated materials. */
 export interface StudyDocument {
   id: string;
@@ -111,6 +117,21 @@ export interface StudyDocument {
   summary: CourseSummary | null;
   quiz: QuizContent | null;
   errorMessage?: string;
+  /** Raw text from PDF (may be truncated for localStorage — see textTruncated). */
+  extractedText: string;
+  /** Short plain-text preview for cards and debugging. */
+  textPreview: string;
+  pageCount: number | null;
+  /** True once server-side PDF parsing returned usable text for this doc. */
+  parseSucceeded: boolean;
+  parseErrorMessage?: string;
+  textTruncated?: boolean;
+  /** Older saved workspaces may have mock SCM content without extraction. */
+  contentSource?: DocumentContentSource;
+  /** How the summary field was produced (new uploads use OpenAI when configured). */
+  summarySource?: SummarySource;
+  /** PDF text OK but AI summary failed; quiz may still exist. */
+  summaryError?: string;
 }
 
 /**

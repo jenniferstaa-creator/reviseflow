@@ -3,19 +3,25 @@
 import * as React from "react";
 import type {
   AppState,
+  CourseSummary,
   ExamConfig,
   MistakeRecord,
   SubjectAccent,
   SubjectIconId,
   SubjectWorkspace,
   StudyDocument,
+  SummarySource,
 } from "@/data/types";
 import {
   SAMPLE_MISTAKES,
   buildMockDailyPlan,
   guessErrorType,
-  mockArtifactsForNewDocument,
 } from "@/data/mock-course";
+import {
+  buildQuizFromExtractedText,
+  buildTextPreview,
+} from "@/lib/generate-from-text";
+import { MAX_EXTRACTED_TEXT_STORED, TEXT_PREVIEW_LENGTH } from "@/lib/pdf-constants";
 import {
   workspaceReducer,
   type WorkspaceAction,
@@ -148,56 +154,163 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         fileName: file.name,
         uploadedAt: now,
         status: "uploading",
-        analysisStep: "Receiving file…",
+        analysisStep: "Preparing PDF…",
         summary: null,
         quiz: null,
+        extractedText: "",
+        textPreview: "",
+        pageCount: null,
+        parseSucceeded: false,
+        contentSource: "extracted",
       };
       dispatch({ type: "ADD_DOCUMENT", subjectId, doc });
       dispatch({ type: "SELECT_DOCUMENT", subjectId, docId });
 
-      // TODO(PDF): replace simulation with real pipeline + job ids
-      window.setTimeout(() => {
-        dispatch({
-          type: "UPDATE_DOCUMENT",
-          subjectId,
-          docId,
-          patch: { status: "analyzing", analysisStep: "Extracting structure from PDF…" },
-        });
-      }, 900);
+      void (async () => {
+        const patchDocument = (patch: Partial<StudyDocument>) =>
+          dispatch({ type: "UPDATE_DOCUMENT", subjectId, docId, patch });
 
-      window.setTimeout(() => {
-        dispatch({
-          type: "UPDATE_DOCUMENT",
-          subjectId,
-          docId,
-          patch: { analysisStep: "Identifying chapters and key terms…" },
-        });
-      }, 2200);
+        try {
+          patchDocument({
+            status: "analyzing",
+            analysisStep: "Extracting text from PDF…",
+          });
 
-      window.setTimeout(() => {
-        dispatch({
-          type: "UPDATE_DOCUMENT",
-          subjectId,
-          docId,
-          patch: { analysisStep: "Drafting summary and assessment items…" },
-        });
-      }, 3800);
+          const form = new FormData();
+          form.set("file", file, file.name);
 
-      window.setTimeout(() => {
-        const { summary, quiz } = mockArtifactsForNewDocument();
-        dispatch({
-          type: "UPDATE_DOCUMENT",
-          subjectId,
-          docId,
-          patch: {
+          const res = await fetch("/api/parse-pdf", {
+            method: "POST",
+            body: form,
+          });
+
+          const payload = (await res.json()) as {
+            ok?: boolean;
+            text?: string;
+            numPages?: number | null;
+            error?: string;
+          };
+
+          if (!res.ok || !payload.ok) {
+            const msg =
+              typeof payload.error === "string"
+                ? payload.error
+                : `Request failed (${res.status})`;
+            patchDocument({
+              status: "error",
+              analysisStep: null,
+              parseSucceeded: false,
+              parseErrorMessage: msg,
+              errorMessage: msg,
+            });
+            return;
+          }
+
+          let text = String(payload.text ?? "").trim();
+          const numPages =
+            typeof payload.numPages === "number" ? payload.numPages : null;
+
+          if (!text.length) {
+            patchDocument({
+              status: "error",
+              analysisStep: null,
+              parseSucceeded: false,
+              parseErrorMessage:
+                "No text could be extracted. The PDF may be image-only (scanned); OCR is not enabled in this build.",
+              errorMessage: "No extractable text",
+              pageCount: numPages,
+              textPreview: "",
+              extractedText: "",
+            });
+            return;
+          }
+
+          let textTruncated = false;
+          if (text.length > MAX_EXTRACTED_TEXT_STORED) {
+            text = text.slice(0, MAX_EXTRACTED_TEXT_STORED);
+            textTruncated = true;
+          }
+
+          const textPreview = buildTextPreview(text, TEXT_PREVIEW_LENGTH);
+
+          patchDocument({
+            analysisStep: "Generating study summary with AI…",
+            extractedText: text,
+            textPreview,
+            pageCount: numPages,
+            parseSucceeded: true,
+            parseErrorMessage: undefined,
+            textTruncated,
+            errorMessage: undefined,
+            summaryError: undefined,
+          });
+
+          let summary: CourseSummary | null = null;
+          let summarySource: SummarySource | undefined;
+          let summaryError: string | undefined;
+
+          try {
+            const summaryRes = await fetch("/api/analyze-summary", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                text,
+                documentTitle: file.name,
+                pageCount: numPages,
+                textWasClipped: textTruncated,
+              }),
+            });
+
+            const summaryPayload = (await summaryRes.json()) as {
+              ok?: boolean;
+              summary?: CourseSummary;
+              error?: string;
+            };
+
+            if (
+              summaryRes.ok &&
+              summaryPayload.ok &&
+              summaryPayload.summary
+            ) {
+              summary = summaryPayload.summary;
+              summarySource = "openai";
+            } else {
+              summaryError =
+                typeof summaryPayload.error === "string"
+                  ? summaryPayload.error
+                  : `Summary API failed (${summaryRes.status})`;
+            }
+          } catch (e) {
+            summaryError =
+              e instanceof Error ? e.message : "Summary request failed";
+          }
+
+          patchDocument({
+            analysisStep: "Building practice quiz from extracted text…",
+          });
+
+          const quiz = buildQuizFromExtractedText(text, docId);
+
+          patchDocument({
             status: "ready",
             analysisStep: null,
             summary,
             quiz,
-          },
-        });
-        // TODO(OpenAI): store per-document model output; TODO(DB): persist rows
-      }, 5200);
+            contentSource: "extracted",
+            summarySource,
+            summaryError,
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Unexpected error";
+          patchDocument({
+            status: "error",
+            analysisStep: null,
+            parseSucceeded: false,
+            parseErrorMessage: msg,
+            errorMessage: msg,
+          });
+        }
+      })();
     },
     []
   );

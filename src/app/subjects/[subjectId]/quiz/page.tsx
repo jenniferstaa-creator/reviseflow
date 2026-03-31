@@ -169,6 +169,14 @@ function SubjectQuizInner() {
 
   return (
     <div className="space-y-8">
+      {selectedDocument.contentSource === "extracted" &&
+      selectedDocument.parseSucceeded ? (
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          Questions are generated from this PDF&apos;s extracted text (rule-based,
+          not an external AI). In Summary, open the &quot;Extracted text&quot; tab
+          to verify the source.
+        </p>
+      ) : null}
       <DocumentSelector />
       {retryMode ? (
         <Badge variant="secondary" className="text-xs font-normal">
