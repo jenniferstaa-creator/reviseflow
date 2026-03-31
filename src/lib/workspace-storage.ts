@@ -6,6 +6,7 @@
 import type {
   AppState,
   DocumentContentSource,
+  QuizSource,
   SubjectWorkspace,
   SummarySource,
 } from "@/data/types";
@@ -93,6 +94,16 @@ function migrateIfNeeded(state: AppState): AppState {
           return undefined;
         })(),
         summaryError: (d as StudyDocumentCompat).summaryError,
+        quizSource: ((): QuizSource | undefined => {
+          const q = (d as StudyDocumentCompat).quizSource;
+          if (q === "openai" || q === "heuristic" || q === "legacy-mock") {
+            return q;
+          }
+          if (hadMockMaterials) return "legacy-mock";
+          if (hasText && d.quiz) return "heuristic";
+          return undefined;
+        })(),
+        quizError: (d as StudyDocumentCompat).quizError,
       };
     }),
     mistakes: (s.mistakes ?? []).map((m) => ({
@@ -122,6 +133,8 @@ type StudyDocumentCompat = {
   contentSource?: string;
   summarySource?: string;
   summaryError?: string;
+  quizSource?: string;
+  quizError?: string;
 };
 
 export function findSubject(

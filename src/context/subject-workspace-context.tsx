@@ -27,10 +27,14 @@ export type SubjectWorkspaceContextValue = {
   deleteDocument: (docId: string) => void;
   addMistake: (
     documentId: string,
-    m: Omit<MistakeRecord, "id" | "createdAt" | "errorType" | "documentId"> & {
+    m: Omit<
+      MistakeRecord,
+      "id" | "createdAt" | "errorType" | "documentId" | "subjectId"
+    > & {
       errorType?: MistakeRecord["errorType"];
     }
   ) => void;
+  removeMistakeForQuestion: (documentId: string, questionId: string) => void;
   clearMistakes: () => void;
   loadSampleMistakes: () => void;
   saveExamPlan: (config: ExamConfig) => void;
@@ -110,6 +114,8 @@ function SubjectWorkspaceInner({
     addDocumentFromFile: (file) => ws.addDocumentFromFile(subjectId, file),
     deleteDocument: (docId) => ws.deleteDocument(subjectId, docId),
     addMistake: (documentId, m) => ws.addMistake(subjectId, documentId, m),
+    removeMistakeForQuestion: (documentId, questionId) =>
+      ws.removeMistakeForQuestion(subjectId, documentId, questionId),
     clearMistakes: () => ws.clearMistakes(subjectId),
     loadSampleMistakes: () => ws.loadSampleMistakes(subjectId),
     saveExamPlan: (config) => ws.saveExamPlan(subjectId, config),

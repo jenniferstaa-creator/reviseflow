@@ -69,6 +69,8 @@ export interface MistakeRecord {
   questionId: string;
   /** Source document when mistake came from quiz (for filtering / analytics). */
   documentId: string;
+  /** Subject scope (mirror of workspace id; optional for older localStorage rows). */
+  subjectId?: string;
   question: string;
   userAnswer: string;
   correctAnswer: string;
@@ -106,6 +108,9 @@ export type DocumentContentSource = "extracted" | "legacy-mock";
 /** Where the structured summary came from. */
 export type SummarySource = "openai" | "heuristic" | "legacy-mock";
 
+/** Where the quiz question set came from. */
+export type QuizSource = "openai" | "heuristic" | "legacy-mock";
+
 /** One uploaded PDF and its generated materials. */
 export interface StudyDocument {
   id: string;
@@ -132,6 +137,10 @@ export interface StudyDocument {
   summarySource?: SummarySource;
   /** PDF text OK but AI summary failed; quiz may still exist. */
   summaryError?: string;
+  /** How the quiz field was produced. */
+  quizSource?: QuizSource;
+  /** Set when OpenAI quiz failed and heuristic fallback was used (or other quiz issues). */
+  quizError?: string;
 }
 
 /**

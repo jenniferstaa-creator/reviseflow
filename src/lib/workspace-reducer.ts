@@ -38,6 +38,12 @@ export type WorkspaceAction =
   | { type: "DELETE_DOCUMENT"; subjectId: string; docId: string }
   | { type: "SELECT_DOCUMENT"; subjectId: string; docId: string | null }
   | { type: "ADD_MISTAKE"; subjectId: string; mistake: MistakeRecord }
+  | {
+      type: "REMOVE_MISTAKE_FOR_QUESTION";
+      subjectId: string;
+      documentId: string;
+      questionId: string;
+    }
   | { type: "CLEAR_MISTAKES"; subjectId: string }
   | { type: "SET_MISTAKES"; subjectId: string; mistakes: MistakeRecord[] }
   | {
@@ -180,18 +186,42 @@ export function workspaceReducer(
         ...state,
         subjects: state.subjects.map((s) => {
           if (s.id !== action.subjectId) return s;
-          if (
-            s.mistakes.some(
-              (x) =>
-                x.questionId === m.questionId && x.documentId === m.documentId
-            )
-          ) {
-            return { ...s, ...touch(now) };
+          const existingIdx = s.mistakes.findIndex(
+            (x) =>
+              x.questionId === m.questionId && x.documentId === m.documentId
+          );
+          if (existingIdx >= 0) {
+            const prev = s.mistakes[existingIdx];
+            const updated: MistakeRecord = {
+              ...m,
+              id: prev.id,
+              createdAt: new Date().toISOString(),
+            };
+            const rest = s.mistakes.filter((_, i) => i !== existingIdx);
+            return { ...s, ...touch(now), mistakes: [updated, ...rest] };
           }
           return {
             ...s,
             ...touch(now),
             mistakes: [m, ...s.mistakes],
+          };
+        }),
+      };
+    }
+
+    case "REMOVE_MISTAKE_FOR_QUESTION": {
+      const { subjectId, documentId, questionId } = action;
+      return {
+        ...state,
+        subjects: state.subjects.map((s) => {
+          if (s.id !== subjectId) return s;
+          return {
+            ...s,
+            ...touch(now),
+            mistakes: s.mistakes.filter(
+              (x) =>
+                !(x.documentId === documentId && x.questionId === questionId)
+            ),
           };
         }),
       };

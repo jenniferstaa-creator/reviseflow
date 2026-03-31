@@ -6,6 +6,8 @@ import type {
   CourseSummary,
   ExamConfig,
   MistakeRecord,
+  QuizContent,
+  QuizSource,
   SubjectAccent,
   SubjectIconId,
   SubjectWorkspace,
@@ -59,9 +61,17 @@ type WorkspaceContextValue = {
   addMistake: (
     subjectId: string,
     documentId: string,
-    m: Omit<MistakeRecord, "id" | "createdAt" | "errorType" | "documentId"> & {
+    m: Omit<
+      MistakeRecord,
+      "id" | "createdAt" | "errorType" | "documentId" | "subjectId"
+    > & {
       errorType?: MistakeRecord["errorType"];
     }
+  ) => void;
+  removeMistakeForQuestion: (
+    subjectId: string,
+    documentId: string,
+    questionId: string
   ) => void;
   clearMistakes: (subjectId: string) => void;
   loadSampleMistakes: (subjectId: string) => void;
@@ -162,6 +172,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         pageCount: null,
         parseSucceeded: false,
         contentSource: "extracted",
+        quizError: undefined,
       };
       dispatch({ type: "ADD_DOCUMENT", subjectId, doc });
       dispatch({ type: "SELECT_DOCUMENT", subjectId, docId });
@@ -286,10 +297,51 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           }
 
           patchDocument({
-            analysisStep: "Building practice quiz from extracted text…",
+            analysisStep: "Generating practice quiz with AI…",
+            quizError: undefined,
           });
 
-          const quiz = buildQuizFromExtractedText(text, docId);
+          let quiz: QuizContent;
+          let quizSource: QuizSource;
+          let quizError: string | undefined;
+
+          try {
+            const quizRes = await fetch("/api/analyze-quiz", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                text,
+                documentTitle: file.name,
+                documentId: docId,
+                subjectId,
+                pageCount: numPages,
+                textWasClipped: textTruncated,
+              }),
+            });
+
+            const quizPayload = (await quizRes.json()) as {
+              ok?: boolean;
+              quiz?: QuizContent;
+              error?: string;
+            };
+
+            if (quizRes.ok && quizPayload.ok && quizPayload.quiz) {
+              quiz = quizPayload.quiz;
+              quizSource = "openai";
+            } else {
+              throw new Error(
+                typeof quizPayload.error === "string"
+                  ? quizPayload.error
+                  : `Quiz API failed (${quizRes.status})`
+              );
+            }
+          } catch (e) {
+            quiz = buildQuizFromExtractedText(text, docId);
+            quizSource = "heuristic";
+            const detail =
+              e instanceof Error ? e.message : "Quiz AI request failed";
+            quizError = `AI quiz generation did not complete. Using rule-based questions derived only from this PDF’s text. ${detail}`;
+          }
 
           patchDocument({
             status: "ready",
@@ -299,6 +351,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             contentSource: "extracted",
             summarySource,
             summaryError,
+            quizSource,
+            quizError,
           });
         } catch (e) {
           const msg = e instanceof Error ? e.message : "Unexpected error";
@@ -340,6 +394,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       const record: MistakeRecord = {
         ...m,
         documentId,
+        subjectId,
         id: `mistake-${subjectId}-${++mistakeSeq.current}`,
         errorType:
           m.errorType ??
@@ -347,6 +402,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         createdAt: new Date().toISOString(),
       };
       dispatch({ type: "ADD_MISTAKE", subjectId, mistake: record });
+    },
+    []
+  );
+
+  const removeMistakeForQuestion = React.useCallback(
+    (subjectId: string, documentId: string, questionId: string) => {
+      dispatch({
+        type: "REMOVE_MISTAKE_FOR_QUESTION",
+        subjectId,
+        documentId,
+        questionId,
+      });
     },
     []
   );
@@ -363,6 +430,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       ...row,
       id: `mist-sample-${i}-${subjectId}`,
       documentId: docId,
+      subjectId,
     }));
     dispatch({ type: "SET_MISTAKES", subjectId, mistakes: seeded });
   }, []);
@@ -411,6 +479,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       deleteDocument,
       selectDocument,
       addMistake,
+      removeMistakeForQuestion,
       clearMistakes,
       loadSampleMistakes,
       saveExamPlan,
@@ -428,6 +497,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       deleteDocument,
       selectDocument,
       addMistake,
+      removeMistakeForQuestion,
       clearMistakes,
       loadSampleMistakes,
       saveExamPlan,

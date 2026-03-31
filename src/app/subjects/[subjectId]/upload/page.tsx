@@ -173,8 +173,9 @@ export default function SubjectUploadPage() {
         Each document card shows a visible{" "}
         <span className="font-medium text-foreground">Extracted text preview</span>{" "}
         as soon as parsing succeeds, so you can confirm the right PDF before the
-        OpenAI summary step. Practice questions are built locally from the same
-        extract. Data stays in your browser via localStorage after processing.
+        OpenAI summary step, then an OpenAI quiz step from the same extract (with a
+        rule-based fallback if the quiz API fails). Data stays in your browser via
+        localStorage after processing.
       </p>
 
       <input
@@ -316,14 +317,29 @@ export default function SubjectUploadPage() {
                         <code className="rounded bg-muted px-1 py-px">OPENAI_API_KEY</code>{" "}
                         in{" "}
                         <code className="rounded bg-muted px-1 py-px">.env.local</code>
-                        , quotas, and network. Quiz questions were still created
-                        from your PDF text.
+                        , quotas, and network. The quiz step still runs separately
+                        (OpenAI or rule-based fallback from your PDF).
+                      </p>
+                    </div>
+                  ) : null}
+                  {d.status === "ready" && d.quizError ? (
+                    <div className="border-t border-amber-300/80 bg-amber-50/80 px-4 py-3 dark:border-amber-800/50 dark:bg-amber-950/30">
+                      <p className="text-sm font-medium text-amber-950 dark:text-amber-100">
+                        Quiz used rule-based fallback
+                      </p>
+                      <p className="mt-1 text-xs text-amber-900/95 dark:text-amber-200/95 leading-relaxed">
+                        {d.quizError}
                       </p>
                     </div>
                   ) : null}
                   {d.status === "ready" && d.summarySource === "openai" && d.summary ? (
                     <div className="border-t border-primary/20 bg-primary/5 px-4 py-2 text-center text-xs font-medium text-foreground">
-                      Generated from uploaded PDF content
+                      Summary: generated from uploaded PDF content (OpenAI)
+                    </div>
+                  ) : null}
+                  {d.status === "ready" && d.quizSource === "openai" && d.quiz ? (
+                    <div className="border-t border-primary/20 bg-primary/5 px-4 py-2 text-center text-xs font-medium text-foreground">
+                      Quiz: generated from uploaded PDF content (OpenAI)
                     </div>
                   ) : null}
                   <CardContent className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-4">
