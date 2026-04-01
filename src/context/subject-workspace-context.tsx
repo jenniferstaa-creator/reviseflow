@@ -5,7 +5,10 @@ import { notFound, useParams } from "next/navigation";
 import type {
   ExamConfig,
   MistakeRecord,
+  MockPracticeQuestion,
   StudyDocument,
+  StudyPracticeQuestion,
+  StudyPracticeSet,
   SubjectAnalysisMeta,
   SubjectAggregateAnalysis,
   SubjectWorkspace,
@@ -57,6 +60,20 @@ export type SubjectWorkspaceContextValue = {
     documentId: string,
     conceptName: string,
     outcome: "correct" | "incorrect"
+  ) => void;
+  addMockPracticePaperFromFile: (file: File) => void;
+  deleteMockPracticePaper: (paperId: string) => void;
+  updateMockPracticeQuestion: (
+    paperId: string,
+    questionId: string,
+    patch: Partial<MockPracticeQuestion>
+  ) => void;
+  addStudyPracticeSet: (set: StudyPracticeSet) => void;
+  deleteStudyPracticeSet: (setId: string) => void;
+  updateStudyPracticeQuestion: (
+    setId: string,
+    questionId: string,
+    patch: Partial<StudyPracticeQuestion>
   ) => void;
 };
 
@@ -156,6 +173,18 @@ function SubjectWorkspaceInner({
     setPartialPlanProgress: (n) => ws.setPartialPlanProgress(subjectId, n),
     recordConceptReview: (documentId, conceptName, outcome) =>
       ws.recordConceptReview(subjectId, documentId, conceptName, outcome),
+    addMockPracticePaperFromFile: (file) =>
+      ws.addMockPracticePaperFromFile(subjectId, file),
+    deleteMockPracticePaper: (paperId) =>
+      ws.deleteMockPracticePaper(subjectId, paperId),
+    updateMockPracticeQuestion: (paperId, questionId, patch) =>
+      ws.updateMockPracticeQuestion(subjectId, paperId, questionId, patch),
+    addStudyPracticeSet: (set) =>
+      ws.addStudyPracticeSet(subjectId, set),
+    deleteStudyPracticeSet: (setId) =>
+      ws.deleteStudyPracticeSet(subjectId, setId),
+    updateStudyPracticeQuestion: (setId, questionId, patch) =>
+      ws.updateStudyPracticeQuestion(subjectId, setId, questionId, patch),
   };
 
   return (

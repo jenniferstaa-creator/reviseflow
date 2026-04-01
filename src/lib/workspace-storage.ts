@@ -7,12 +7,18 @@ import type {
   AppState,
   ConceptReviewProgressState,
   DocumentContentSource,
+  MockPracticePaper,
+  MockPracticeQuestion,
+  PracticeQuestionType,
   QuizSource,
+  StudyPracticeQuestion,
+  StudyPracticeSet,
   SubjectAggregateAnalysis,
   SubjectAnalysisMeta,
   SubjectWorkspace,
   SummarySource,
 } from "@/data/types";
+import { classifyPracticeQuestion } from "@/lib/practice-question-classify";
 
 export const WORKSPACE_STORAGE_KEY = "reviseflow-workspace-v1";
 
@@ -58,6 +64,143 @@ export function saveWorkspaceState(state: AppState): void {
   } catch {
     /* quota / private mode */
   }
+}
+
+function readStructuredPrompt(q: Record<string, unknown>): string {
+  const p = q.prompt ?? q.promptText;
+  return typeof p === "string" ? p : String(p ?? "");
+}
+
+function readStructuredCorrectAnswer(q: Record<string, unknown>): string | null {
+  const a = q.correctAnswer ?? q.correctSelection;
+  if (typeof a === "string") {
+    const t = a.trim();
+    return t.length ? t : null;
+  }
+  return null;
+}
+
+function readStructuredMarks(q: Record<string, unknown>): number | null {
+  const m = q.marks;
+  return typeof m === "number" && Number.isFinite(m) ? m : null;
+}
+
+function readStructuredSource(q: Record<string, unknown>): string {
+  const s = q.source ?? q.sourceLabel;
+  return typeof s === "string" ? s.trim() : String(s ?? "").trim();
+}
+
+function migrateMockPracticeQuestionRow(
+  q: Record<string, unknown>
+): MockPracticeQuestion {
+  const prompt = readStructuredPrompt(q);
+  const qt = q.questionType;
+  const opts = q.options;
+  const sharedEval = {
+    userAnswer: String(q.userAnswer ?? ""),
+    selectionIsCorrect:
+      q.selectionIsCorrect === true ||
+      q.selectionIsCorrect === false ||
+      q.selectionIsCorrect === null
+        ? (q.selectionIsCorrect as boolean | null)
+        : null,
+    suggestedAnswer:
+      typeof q.suggestedAnswer === "string" ? q.suggestedAnswer : null,
+    keyPoints: Array.isArray(q.keyPoints)
+      ? (q.keyPoints as string[]).filter((x) => typeof x === "string")
+      : [],
+    feedback: typeof q.feedback === "string" ? q.feedback : null,
+    strongerPhrasing:
+      typeof q.strongerPhrasing === "string" ? q.strongerPhrasing : null,
+    markedDifficult: Boolean(q.markedDifficult),
+    savedForLater: Boolean(q.savedForLater),
+    evaluatedAt: typeof q.evaluatedAt === "string" ? q.evaluatedAt : null,
+  };
+  if (
+    typeof qt === "string" &&
+    Array.isArray(opts) &&
+    opts.every((x) => typeof x === "string")
+  ) {
+    return {
+      id: String(q.id ?? ""),
+      prompt: prompt.trim(),
+      questionType: qt as PracticeQuestionType,
+      options: opts as string[],
+      correctAnswer: readStructuredCorrectAnswer(q),
+      marks: readStructuredMarks(q),
+      source: readStructuredSource(q),
+      ...sharedEval,
+    };
+  }
+  const c = classifyPracticeQuestion(prompt);
+  return {
+    id: String(q.id ?? ""),
+    prompt: c.prompt,
+    questionType: c.questionType,
+    options: c.options,
+    correctAnswer: readStructuredCorrectAnswer(q),
+    marks: readStructuredMarks(q),
+    source: readStructuredSource(q),
+    ...sharedEval,
+  };
+}
+
+function migrateStudyPracticeQuestionRow(
+  q: Record<string, unknown>
+): StudyPracticeQuestion {
+  const prompt = readStructuredPrompt(q);
+  const qt = q.questionType;
+  const opts = q.options;
+  const sharedStudy = {
+    sourceDocumentId:
+      typeof q.sourceDocumentId === "string" ? q.sourceDocumentId : null,
+    suggestedAnswer: String(q.suggestedAnswer ?? ""),
+    keyPoints: Array.isArray(q.keyPoints)
+      ? (q.keyPoints as string[]).filter((x) => typeof x === "string")
+      : [],
+    userAnswer: String(q.userAnswer ?? ""),
+    selectionIsCorrect:
+      q.selectionIsCorrect === true ||
+      q.selectionIsCorrect === false ||
+      q.selectionIsCorrect === null
+        ? (q.selectionIsCorrect as boolean | null)
+        : null,
+    revealedAnswer: Boolean(q.revealedAnswer),
+    revealedKeyPoints: Boolean(q.revealedKeyPoints),
+    feedback: typeof q.feedback === "string" ? q.feedback : null,
+    strongerPhrasing:
+      typeof q.strongerPhrasing === "string" ? q.strongerPhrasing : null,
+    markedDifficult: Boolean(q.markedDifficult),
+    savedForLater: Boolean(q.savedForLater),
+    evaluatedAt: typeof q.evaluatedAt === "string" ? q.evaluatedAt : null,
+  };
+  if (
+    typeof qt === "string" &&
+    Array.isArray(opts) &&
+    opts.every((x) => typeof x === "string")
+  ) {
+    return {
+      id: String(q.id ?? ""),
+      prompt: prompt.trim(),
+      questionType: qt as PracticeQuestionType,
+      options: opts as string[],
+      correctAnswer: readStructuredCorrectAnswer(q),
+      marks: readStructuredMarks(q),
+      source: readStructuredSource(q),
+      ...sharedStudy,
+    };
+  }
+  const c = classifyPracticeQuestion(prompt);
+  return {
+    id: String(q.id ?? ""),
+    prompt: c.prompt,
+    questionType: c.questionType,
+    options: c.options,
+    correctAnswer: readStructuredCorrectAnswer(q),
+    marks: readStructuredMarks(q),
+    source: readStructuredSource(q),
+    ...sharedStudy,
+  };
 }
 
 /** Extend when schema changes. */
@@ -123,6 +266,22 @@ function migrateIfNeeded(state: AppState): AppState {
       (s as SubjectWorkspaceCompat).subjectAnalysisMeta ?? null,
     conceptReviewByKey:
       (s as SubjectWorkspaceCompat).conceptReviewByKey ?? {},
+    mockPracticePapers: (
+      (s as SubjectWorkspaceCompat).mockPracticePapers ?? []
+    ).map((p) => ({
+      ...p,
+      questions: (p.questions ?? []).map((q) =>
+        migrateMockPracticeQuestionRow(q as unknown as Record<string, unknown>)
+      ),
+    })),
+    studyPracticeSets: (
+      (s as SubjectWorkspaceCompat).studyPracticeSets ?? []
+    ).map((st) => ({
+      ...st,
+      questions: (st.questions ?? []).map((q) =>
+        migrateStudyPracticeQuestionRow(q as unknown as Record<string, unknown>)
+      ),
+    })),
     accent: s.accent ?? "teal",
     icon: s.icon ?? "book-open",
   }));
@@ -136,6 +295,8 @@ type SubjectWorkspaceCompat = {
   subjectAnalysis?: SubjectAggregateAnalysis | null;
   subjectAnalysisMeta?: SubjectAnalysisMeta | null;
   conceptReviewByKey?: Record<string, ConceptReviewProgressState>;
+  mockPracticePapers?: MockPracticePaper[];
+  studyPracticeSets?: StudyPracticeSet[];
 };
 
 type StudyDocumentCompat = {

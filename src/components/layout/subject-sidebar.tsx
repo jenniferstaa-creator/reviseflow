@@ -15,6 +15,7 @@ import {
   ListChecks,
   Menu,
   PanelTop,
+  ScrollText,
   Sparkles,
   Target,
 } from "lucide-react";
@@ -54,6 +55,11 @@ function buildNavSections(base: string): NavSection[] {
       items: [
         { href: `${base}/summary`, label: "Summary", icon: BookOpen },
         { href: `${base}/quiz`, label: "Quiz", icon: ListChecks },
+        {
+          href: `${base}/mock-practice`,
+          label: "Practice",
+          icon: ScrollText,
+        },
       ],
     },
     {

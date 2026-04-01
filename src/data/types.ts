@@ -137,6 +137,97 @@ export interface ConceptReviewProgressState {
   incorrectCount: number;
 }
 
+/** Classifier output for written vs selection-based practice items. */
+export type PracticeQuestionType =
+  | "true_false"
+  | "multiple_choice"
+  | "short_answer"
+  | "essay";
+
+/**
+ * Normalized fields shared by extracted and generated practice questions.
+ * Prefer this over raw concatenated text for rendering and grading.
+ */
+export interface StructuredPracticeQuestion {
+  questionType: PracticeQuestionType;
+  /** Question stem (no separate option lines when `options` is populated). */
+  prompt: string;
+  /** MCQ labels; empty for written types; TF uses fixed True/False in UI. */
+  options: string[];
+  /**
+   * Canonical correct response when known: "True"/"False", MCQ option text,
+   * or a short key for written items. Null until marked scheme / model supplies it.
+   */
+  correctAnswer: string | null;
+  /** Points/marks if given on the paper or by the generator; null if unknown. */
+  marks: number | null;
+  /** Human-readable origin (e.g. source PDF filename). */
+  source: string;
+}
+
+/** One item from an uploaded past-paper / exam PDF (mock practice workspace). */
+export interface MockPracticeQuestion extends StructuredPracticeQuestion {
+  id: string;
+  userAnswer: string;
+  /** After AI grading: set for true_false / multiple_choice when user submitted. */
+  selectionIsCorrect: boolean | null;
+  /** Full model / rubric-style answer (may be longer than correctAnswer). */
+  suggestedAnswer: string | null;
+  keyPoints: string[];
+  feedback: string | null;
+  strongerPhrasing: string | null;
+  markedDifficult: boolean;
+  savedForLater: boolean;
+  evaluatedAt: string | null;
+}
+
+/** Parsed past-paper upload for the subject’s Mock Practice area. */
+export interface MockPracticePaper {
+  id: string;
+  fileName: string;
+  uploadedAt: string;
+  status: UploadStatus;
+  analysisStep: string | null;
+  errorMessage?: string;
+  extractedText: string;
+  questions: MockPracticeQuestion[];
+}
+
+/** AI practice modes generated from uploaded study PDFs (not past papers). */
+export type StudyPracticeMode =
+  | "quick_check"
+  | "exam_style"
+  | "weak_area_drill";
+
+/** One AI-generated question from course materials. */
+export interface StudyPracticeQuestion extends StructuredPracticeQuestion {
+  id: string;
+  sourceDocumentId: string | null;
+  suggestedAnswer: string;
+  keyPoints: string[];
+  userAnswer: string;
+  /** For TF/MCQ: set when user checks or when correctAnswer matches. */
+  selectionIsCorrect: boolean | null;
+  revealedAnswer: boolean;
+  revealedKeyPoints: boolean;
+  feedback: string | null;
+  strongerPhrasing: string | null;
+  markedDifficult: boolean;
+  savedForLater: boolean;
+  evaluatedAt: string | null;
+}
+
+/** A generated session (single or all PDFs) kept for review. */
+export interface StudyPracticeSet {
+  id: string;
+  createdAt: string;
+  mode: StudyPracticeMode;
+  scope: "single" | "all";
+  sourceDocumentId: string | null;
+  title: string;
+  questions: StudyPracticeQuestion[];
+}
+
 /** How study materials were produced (for migration + debugging). */
 export type DocumentContentSource = "extracted" | "legacy-mock";
 
@@ -232,6 +323,10 @@ export interface SubjectWorkspace {
    * Spaced-repetition progress keyed by `makeConceptReviewKey(documentId, conceptName)`.
    */
   conceptReviewByKey: Record<string, ConceptReviewProgressState>;
+  /** Exam-style practice from uploaded question PDFs (separate from quiz). */
+  mockPracticePapers: MockPracticePaper[];
+  /** AI-generated written practice from lecture/notes PDFs in this subject. */
+  studyPracticeSets: StudyPracticeSet[];
 }
 
 /** Root app state persisted to localStorage. */

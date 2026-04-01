@@ -3,6 +3,10 @@ import type {
   DailyPlanDay,
   ExamConfig,
   MistakeRecord,
+  MockPracticePaper,
+  MockPracticeQuestion,
+  StudyPracticeQuestion,
+  StudyPracticeSet,
   SubjectAccent,
   SubjectAggregateAnalysis,
   SubjectAnalysisMeta,
@@ -78,6 +82,30 @@ export type WorkspaceAction =
       documentId: string;
       conceptName: string;
       outcome: "correct" | "incorrect";
+    }
+  | { type: "ADD_MOCK_PRACTICE_PAPER"; subjectId: string; paper: MockPracticePaper }
+  | {
+      type: "UPDATE_MOCK_PRACTICE_PAPER";
+      subjectId: string;
+      paperId: string;
+      patch: Partial<MockPracticePaper>;
+    }
+  | { type: "DELETE_MOCK_PRACTICE_PAPER"; subjectId: string; paperId: string }
+  | {
+      type: "UPDATE_MOCK_PRACTICE_QUESTION";
+      subjectId: string;
+      paperId: string;
+      questionId: string;
+      patch: Partial<MockPracticeQuestion>;
+    }
+  | { type: "ADD_STUDY_PRACTICE_SET"; subjectId: string; set: StudyPracticeSet }
+  | { type: "DELETE_STUDY_PRACTICE_SET"; subjectId: string; setId: string }
+  | {
+      type: "UPDATE_STUDY_PRACTICE_QUESTION";
+      subjectId: string;
+      setId: string;
+      questionId: string;
+      patch: Partial<StudyPracticeQuestion>;
     };
 
 function touch(now: string): Pick<SubjectWorkspace, "updatedAt"> {
@@ -115,6 +143,8 @@ export function workspaceReducer(
         subjectAnalysis: null,
         subjectAnalysisMeta: null,
         conceptReviewByKey: {},
+        mockPracticePapers: [],
+        studyPracticeSets: [],
       };
       return { ...state, subjects: [...state.subjects, subject] };
     }
@@ -361,6 +391,138 @@ export function workspaceReducer(
             ...s,
             ...touch(now),
             conceptReviewByKey: book,
+          };
+        }),
+      };
+    }
+
+    case "ADD_MOCK_PRACTICE_PAPER": {
+      return {
+        ...state,
+        subjects: state.subjects.map((s) =>
+          s.id === action.subjectId
+            ? {
+                ...s,
+                ...touch(now),
+                mockPracticePapers: [
+                  action.paper,
+                  ...(s.mockPracticePapers ?? []),
+                ],
+              }
+            : s
+        ),
+      };
+    }
+
+    case "UPDATE_MOCK_PRACTICE_PAPER": {
+      return {
+        ...state,
+        subjects: state.subjects.map((s) => {
+          if (s.id !== action.subjectId) return s;
+          return {
+            ...s,
+            ...touch(now),
+            mockPracticePapers: (s.mockPracticePapers ?? []).map((p) =>
+              p.id === action.paperId ? { ...p, ...action.patch } : p
+            ),
+          };
+        }),
+      };
+    }
+
+    case "DELETE_MOCK_PRACTICE_PAPER": {
+      return {
+        ...state,
+        subjects: state.subjects.map((s) =>
+          s.id === action.subjectId
+            ? {
+                ...s,
+                ...touch(now),
+                mockPracticePapers: (s.mockPracticePapers ?? []).filter(
+                  (p) => p.id !== action.paperId
+                ),
+              }
+            : s
+        ),
+      };
+    }
+
+    case "UPDATE_MOCK_PRACTICE_QUESTION": {
+      const { subjectId, paperId, questionId, patch } = action;
+      return {
+        ...state,
+        subjects: state.subjects.map((s) => {
+          if (s.id !== subjectId) return s;
+          return {
+            ...s,
+            ...touch(now),
+            mockPracticePapers: (s.mockPracticePapers ?? []).map((p) => {
+              if (p.id !== paperId) return p;
+              return {
+                ...p,
+                questions: p.questions.map((q) =>
+                  q.id === questionId ? { ...q, ...patch } : q
+                ),
+              };
+            }),
+          };
+        }),
+      };
+    }
+
+    case "ADD_STUDY_PRACTICE_SET": {
+      return {
+        ...state,
+        subjects: state.subjects.map((s) =>
+          s.id === action.subjectId
+            ? {
+                ...s,
+                ...touch(now),
+                studyPracticeSets: [
+                  action.set,
+                  ...(s.studyPracticeSets ?? []),
+                ],
+              }
+            : s
+        ),
+      };
+    }
+
+    case "DELETE_STUDY_PRACTICE_SET": {
+      return {
+        ...state,
+        subjects: state.subjects.map((s) =>
+          s.id === action.subjectId
+            ? {
+                ...s,
+                ...touch(now),
+                studyPracticeSets: (s.studyPracticeSets ?? []).filter(
+                  (x) => x.id !== action.setId
+                ),
+              }
+            : s
+        ),
+      };
+    }
+
+    case "UPDATE_STUDY_PRACTICE_QUESTION": {
+      const { subjectId, setId, questionId, patch } = action;
+      return {
+        ...state,
+        subjects: state.subjects.map((s) => {
+          if (s.id !== subjectId) return s;
+          return {
+            ...s,
+            ...touch(now),
+            studyPracticeSets: (s.studyPracticeSets ?? []).map((st) => {
+              if (st.id !== setId) return st;
+              return {
+                ...st,
+                questions: st.questions.map((q) =>
+                  q.id === questionId ? { ...q, ...patch } : q
+                ),
+              };
+            }),
           };
         }),
       };

@@ -23,6 +23,11 @@ const SEGMENT_META: Record<
     title: "Quiz",
     description: "Check understanding with mixed question types.",
   },
+  "mock-practice": {
+    title: "Written practice",
+    description:
+      "AI questions from your PDFs or past papers—answer first, then reveal models and coaching.",
+  },
   mistakes: {
     title: "Mistake notebook",
     description: "Wrong answers for this subject, with context.",

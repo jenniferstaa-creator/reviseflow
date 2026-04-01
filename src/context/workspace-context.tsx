@@ -5,6 +5,11 @@ import type {
   AppState,
   ExamConfig,
   MistakeRecord,
+  MockPracticePaper,
+  MockPracticeQuestion,
+  PracticeQuestionType,
+  StudyPracticeQuestion,
+  StudyPracticeSet,
   SubjectAccent,
   SubjectAggregateAnalysis,
   SubjectIconId,
@@ -43,6 +48,37 @@ import {
 import { toLocalDateKey } from "@/lib/dates";
 
 const INITIAL: AppState = { version: 1, subjects: [] };
+
+function emptyMockQuestion(
+  input: {
+    questionType: PracticeQuestionType;
+    prompt: string;
+    options: string[];
+    correctAnswer: string | null;
+    marks: number | null;
+    source: string;
+  },
+  id = newId("mq")
+): MockPracticeQuestion {
+  return {
+    id,
+    questionType: input.questionType,
+    prompt: input.prompt,
+    options: input.options,
+    correctAnswer: input.correctAnswer,
+    marks: input.marks,
+    source: input.source,
+    userAnswer: "",
+    selectionIsCorrect: null,
+    suggestedAnswer: null,
+    keyPoints: [],
+    feedback: null,
+    strongerPhrasing: null,
+    markedDifficult: false,
+    savedForLater: false,
+    evaluatedAt: null,
+  };
+}
 
 type WorkspaceContextValue = {
   hydrated: boolean;
@@ -105,6 +141,22 @@ type WorkspaceContextValue = {
     documentId: string,
     conceptName: string,
     outcome: "correct" | "incorrect"
+  ) => void;
+  addMockPracticePaperFromFile: (subjectId: string, file: File) => void;
+  deleteMockPracticePaper: (subjectId: string, paperId: string) => void;
+  updateMockPracticeQuestion: (
+    subjectId: string,
+    paperId: string,
+    questionId: string,
+    patch: Partial<MockPracticeQuestion>
+  ) => void;
+  addStudyPracticeSet: (subjectId: string, set: StudyPracticeSet) => void;
+  deleteStudyPracticeSet: (subjectId: string, setId: string) => void;
+  updateStudyPracticeQuestion: (
+    subjectId: string,
+    setId: string,
+    questionId: string,
+    patch: Partial<StudyPracticeQuestion>
   ) => void;
 };
 
@@ -739,6 +791,226 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const deleteMockPracticePaper = React.useCallback(
+    (subjectId: string, paperId: string) => {
+      dispatch({ type: "DELETE_MOCK_PRACTICE_PAPER", subjectId, paperId });
+    },
+    []
+  );
+
+  const updateMockPracticeQuestion = React.useCallback(
+    (
+      subjectId: string,
+      paperId: string,
+      questionId: string,
+      patch: Partial<MockPracticeQuestion>
+    ) => {
+      dispatch({
+        type: "UPDATE_MOCK_PRACTICE_QUESTION",
+        subjectId,
+        paperId,
+        questionId,
+        patch,
+      });
+    },
+    []
+  );
+
+  const addStudyPracticeSet = React.useCallback(
+    (subjectId: string, set: StudyPracticeSet) => {
+      dispatch({ type: "ADD_STUDY_PRACTICE_SET", subjectId, set });
+    },
+    []
+  );
+
+  const deleteStudyPracticeSet = React.useCallback(
+    (subjectId: string, setId: string) => {
+      dispatch({ type: "DELETE_STUDY_PRACTICE_SET", subjectId, setId });
+    },
+    []
+  );
+
+  const updateStudyPracticeQuestion = React.useCallback(
+    (
+      subjectId: string,
+      setId: string,
+      questionId: string,
+      patch: Partial<StudyPracticeQuestion>
+    ) => {
+      dispatch({
+        type: "UPDATE_STUDY_PRACTICE_QUESTION",
+        subjectId,
+        setId,
+        questionId,
+        patch,
+      });
+    },
+    []
+  );
+
+  const addMockPracticePaperFromFile = React.useCallback(
+    (subjectId: string, file: File) => {
+      const paperId = newId("mp");
+      const now = new Date().toISOString();
+      const initial: MockPracticePaper = {
+        id: paperId,
+        fileName: file.name,
+        uploadedAt: now,
+        status: "uploading",
+        analysisStep: "Uploading PDF…",
+        extractedText: "",
+        questions: [],
+      };
+      dispatch({ type: "ADD_MOCK_PRACTICE_PAPER", subjectId, paper: initial });
+
+      void (async () => {
+        const patchPaper = (patch: Partial<MockPracticePaper>) =>
+          dispatch({
+            type: "UPDATE_MOCK_PRACTICE_PAPER",
+            subjectId,
+            paperId,
+            patch,
+          });
+
+        try {
+          patchPaper({
+            status: "analyzing",
+            analysisStep: "Extracting text from PDF…",
+          });
+
+          const form = new FormData();
+          form.set("file", file, file.name);
+          const res = await fetch("/api/parse-pdf", {
+            method: "POST",
+            body: form,
+          });
+          let payload: {
+            ok?: boolean;
+            text?: string;
+            error?: string;
+          };
+          try {
+            payload = (await res.json()) as typeof payload;
+          } catch {
+            patchPaper({
+              status: "error",
+              analysisStep: null,
+              errorMessage: "Invalid response from PDF parser.",
+            });
+            return;
+          }
+
+          if (!res.ok || !payload.ok) {
+            patchPaper({
+              status: "error",
+              analysisStep: null,
+              errorMessage:
+                typeof payload.error === "string"
+                  ? payload.error
+                  : `PDF parse failed (HTTP ${res.status})`,
+            });
+            return;
+          }
+
+          let text = String(payload.text ?? "").trim();
+          if (!text.length) {
+            patchPaper({
+              status: "error",
+              analysisStep: null,
+              errorMessage:
+                "No text extracted. This PDF may be scanned images only.",
+            });
+            return;
+          }
+
+          if (text.length > MAX_EXTRACTED_TEXT_STORED) {
+            text = text.slice(0, MAX_EXTRACTED_TEXT_STORED);
+          }
+
+          patchPaper({
+            analysisStep: "Splitting into questions…",
+            extractedText: text,
+          });
+
+          const exRes = await fetch("/api/extract-mock-questions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text,
+              documentTitle: file.name,
+            }),
+          });
+          const exData = (await exRes.json()) as {
+            ok?: boolean;
+            questions?: Array<{
+              questionType: PracticeQuestionType;
+              prompt: string;
+              options: string[];
+              correctAnswer: string | null;
+              marks: number | null;
+              source: string;
+            }>;
+            error?: string;
+          };
+
+          if (!exRes.ok || !exData.ok || !Array.isArray(exData.questions)) {
+            patchPaper({
+              status: "error",
+              analysisStep: null,
+              errorMessage:
+                typeof exData.error === "string"
+                  ? exData.error
+                  : "Could not extract questions from the PDF.",
+            });
+            return;
+          }
+
+          const questions = exData.questions.map((row) =>
+            emptyMockQuestion({
+              questionType: row.questionType,
+              prompt: row.prompt.trim(),
+              options: Array.isArray(row.options) ? row.options : [],
+              correctAnswer:
+                row.correctAnswer === null || typeof row.correctAnswer === "string"
+                  ? row.correctAnswer
+                  : null,
+              marks:
+                typeof row.marks === "number" && Number.isFinite(row.marks)
+                  ? row.marks
+                  : null,
+              source: String(row.source ?? file.name).trim() || file.name,
+            })
+          );
+
+          if (questions.length === 0) {
+            patchPaper({
+              status: "error",
+              analysisStep: null,
+              errorMessage:
+                "No questions found. Try a PDF with clearer numbered questions.",
+            });
+            return;
+          }
+
+          patchPaper({
+            status: "ready",
+            analysisStep: null,
+            questions,
+            errorMessage: undefined,
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Unexpected error";
+          patchPaper({
+            status: "error",
+            analysisStep: null,
+            errorMessage: msg,
+          });
+        }
+      })();
+    },
+    []
+  );
+
   const value = React.useMemo(
     () => ({
       hydrated,
@@ -762,6 +1034,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       toggleDayCompleted,
       setPartialPlanProgress,
       recordConceptReview,
+      addMockPracticePaperFromFile,
+      deleteMockPracticePaper,
+      updateMockPracticeQuestion,
+      addStudyPracticeSet,
+      deleteStudyPracticeSet,
+      updateStudyPracticeQuestion,
     }),
     [
       hydrated,
@@ -784,6 +1062,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       toggleDayCompleted,
       setPartialPlanProgress,
       recordConceptReview,
+      addMockPracticePaperFromFile,
+      deleteMockPracticePaper,
+      updateMockPracticeQuestion,
+      addStudyPracticeSet,
+      deleteStudyPracticeSet,
+      updateStudyPracticeQuestion,
     ]
   );
 

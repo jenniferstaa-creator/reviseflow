@@ -13,6 +13,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  ScrollText,
   Target,
 } from "lucide-react";
 import { useSubjectWorkspace } from "@/context/subject-workspace-context";
@@ -370,6 +371,12 @@ export default function SubjectOverviewPage() {
                 label: "Quiz",
                 icon: ListChecks,
                 sub: "MCQ & short answer",
+              },
+              {
+                href: `${base}/mock-practice`,
+                label: "Practice",
+                icon: ScrollText,
+                sub: "From your PDFs or past papers",
               },
               {
                 href: `${base}/mistakes`,
