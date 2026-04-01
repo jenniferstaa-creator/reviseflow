@@ -3,16 +3,17 @@
 import * as React from "react";
 import Link from "next/link";
 import {
-  AlertTriangle,
   BookOpen,
-  CheckCircle2,
+  Check,
   FileText,
   ListChecks,
   Loader2,
+  Pencil,
   RefreshCw,
   Trash2,
   UploadCloud,
   FileUp,
+  X,
 } from "lucide-react";
 import { useSubjectWorkspace } from "@/context/subject-workspace-context";
 import { Badge } from "@/components/ui/badge";
@@ -29,26 +30,19 @@ import { EmptyState } from "@/components/empty-state";
 import { cn } from "@/lib/utils";
 import { formatIsoDateLongEn } from "@/lib/dates";
 import type { StudyDocument } from "@/data/types";
+import {
+  DocumentSortToolbar,
+  documentStatusSortRank,
+  sortStudyDocuments,
+  type DocumentSortKey,
+} from "@/components/document-sort-toolbar";
 import { MAX_SUMMARY_INPUT_CHARS } from "@/lib/summary-api";
 import { MAX_QUIZ_INPUT_CHARS } from "@/lib/quiz-api";
 import {
   MAX_EXTRACTED_TEXT_STORED,
   MIN_EXTRACT_MEANINGFUL_CHARS,
 } from "@/lib/pdf-constants";
-
-function errorStatusHeading(d: StudyDocument): string {
-  if (d.status !== "error") return "";
-  switch (d.pipelineFailureStage) {
-    case "pdf_parse":
-      return "PDF parsing failed";
-    case "empty_extract":
-      return "No extractable text";
-    case "unexpected":
-      return "Processing failed before save";
-    default:
-      return "Upload failed";
-  }
-}
+import { DocumentAnalysisBadge } from "@/components/document-analysis-status";
 
 function canRetryAnalysis(d: StudyDocument, anyBusy: boolean): boolean {
   if (anyBusy) return false;
@@ -345,25 +339,61 @@ function ParseDebugPanel({ d }: { d: StudyDocument }) {
 export default function SubjectUploadPage() {
   const {
     subjectId,
+    subject,
     documents,
     addDocumentFromFile,
     retryDocumentAnalysis,
     deleteDocument,
+    renameDocument,
     selectDocument,
   } = useSubjectWorkspace();
   const base = `/subjects/${subjectId}`;
 
   const [dragActive, setDragActive] = React.useState(false);
+  const [docSort, setDocSort] = React.useState<DocumentSortKey>("date-desc");
+  const [renamingId, setRenamingId] = React.useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = React.useState("");
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const renameInputRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    if (renamingId && renameInputRef.current) {
+      renameInputRef.current.focus();
+      renameInputRef.current.select();
+    }
+  }, [renamingId]);
 
   const anyBusy = documents.some(
     (d) => d.status === "uploading" || d.status === "analyzing"
   );
 
-  const onFile = (file: File | undefined) => {
-    if (!file) return;
-    if (file.type !== "application/pdf") return;
-    addDocumentFromFile(file);
+  const sortedDocuments = React.useMemo(
+    () =>
+      sortStudyDocuments(
+        documents,
+        docSort,
+        (d) => d.uploadedAt,
+        (d) => d.fileName,
+        (d) => documentStatusSortRank(d.status)
+      ),
+    [documents, docSort]
+  );
+
+  const mistakeCountByDoc = React.useMemo(() => {
+    const m = new Map<string, number>();
+    for (const row of subject.mistakes) {
+      m.set(row.documentId, (m.get(row.documentId) ?? 0) + 1);
+    }
+    return m;
+  }, [subject.mistakes]);
+
+  const addPdfFiles = (files: FileList | File[]) => {
+    const list = Array.from(files).filter(
+      (f) => f.type === "application/pdf"
+    );
+    for (const file of list) {
+      addDocumentFromFile(file);
+    }
   };
 
   return (
@@ -385,7 +415,12 @@ export default function SubjectUploadPage() {
         type="file"
         accept="application/pdf"
         className="hidden"
-        onChange={(e) => onFile(e.target.files?.[0])}
+        multiple
+        onChange={(e) => {
+          const fl = e.target.files;
+          if (fl?.length) addPdfFiles(fl);
+          e.target.value = "";
+        }}
       />
 
       <Card
@@ -405,7 +440,7 @@ export default function SubjectUploadPage() {
         onDrop={(e) => {
           e.preventDefault();
           setDragActive(false);
-          onFile(e.dataTransfer.files?.[0]);
+          if (e.dataTransfer.files?.length) addPdfFiles(e.dataTransfer.files);
         }}
       >
         <CardHeader>
@@ -419,19 +454,20 @@ export default function SubjectUploadPage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div
-            className={cn(
-              "flex min-h-[120px] flex-1 flex-col items-center justify-center rounded-lg border border-dashed border-border/80 bg-muted/25 px-4 py-8 text-center text-sm text-muted-foreground",
-              anyBusy && "pointer-events-none opacity-60"
-            )}
+            className="flex min-h-[120px] flex-1 flex-col items-center justify-center rounded-lg border border-dashed border-border/80 bg-muted/25 px-4 py-8 text-center text-sm text-muted-foreground"
           >
             <UploadCloud className="mb-2 size-8 opacity-50" />
-            <p>Drop PDFs here</p>
-            <p className="mt-1 text-xs">PDF only</p>
+            <p>Drop one or more PDFs here</p>
+            <p className="mt-1 text-xs">Each file is appended — nothing is overwritten</p>
+            {anyBusy ? (
+              <p className="mt-2 text-[11px] text-amber-800/90 dark:text-amber-200/90">
+                Some files are still processing; you can keep adding more.
+              </p>
+            ) : null}
           </div>
           <Button
             type="button"
             variant="secondary"
-            disabled={anyBusy}
             onClick={() => inputRef.current?.click()}
           >
             Browse files
@@ -439,8 +475,25 @@ export default function SubjectUploadPage() {
         </CardContent>
       </Card>
 
-      <div>
-        <h2 className="font-heading text-base font-semibold">Your documents</h2>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="font-heading text-base font-semibold">Your documents</h2>
+            {documents.length > 0 ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Default: newest upload first. Rename or remove files to keep the
+                workspace tidy.
+              </p>
+            ) : null}
+          </div>
+          {documents.length > 0 ? (
+            <DocumentSortToolbar
+              value={docSort}
+              onChange={setDocSort}
+              totalCount={documents.length}
+            />
+          ) : null}
+        </div>
         {documents.length === 0 ? (
           <div className="mt-4">
             <EmptyState
@@ -450,88 +503,121 @@ export default function SubjectUploadPage() {
             />
           </div>
         ) : (
-          <ul className="mt-4 space-y-3">
-            {documents.map((d) => (
+          <ScrollArea className="mt-4 h-[min(70vh,52rem)] pr-3">
+            <ul className="space-y-3 pb-4">
+            {sortedDocuments.map((d) => (
               <li key={d.id}>
                 <Card className="border-border/80 shadow-sm">
-                  <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
-                    <div className="min-w-0">
-                      <CardTitle className="truncate font-heading text-base">
-                        {d.fileName}
-                      </CardTitle>
-                      <CardDescription className="mt-1">
-                        Added{" "}
-                        {formatIsoDateLongEn(d.uploadedAt.slice(0, 10))}
-                        {d.pageCount != null ? (
-                          <span className="ml-2">· {d.pageCount} pages</span>
-                        ) : null}
-                        {d.status === "ready" && d.parseSucceeded ? (
-                          <span
-                            className={cn(
-                              "ml-2 inline-flex items-center gap-1",
-                              d.summaryError || d.quizError || d.errorMessage
-                                ? "text-amber-800 dark:text-amber-200/90"
-                                : "text-primary"
-                            )}
+                  <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2 gap-3">
+                    <div className="min-w-0 flex-1">
+                      {renamingId === d.id ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            ref={renameInputRef}
+                            className="min-w-0 flex-1 rounded-lg border border-input bg-background px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            value={renameDraft}
+                            onChange={(e) => setRenameDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                renameDocument(d.id, renameDraft);
+                                setRenamingId(null);
+                              }
+                              if (e.key === "Escape") {
+                                setRenamingId(null);
+                              }
+                            }}
+                            aria-label="Document name"
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="shrink-0 gap-1"
+                            onClick={() => {
+                              renameDocument(d.id, renameDraft);
+                              setRenamingId(null);
+                            }}
                           >
-                            <CheckCircle2 className="size-3.5" />
-                            {d.extractTooShort
-                              ? "Parsed · low text"
-                              : d.summaryError && d.quizError
-                                ? "Parsed · AI issues"
-                                : d.summaryError
-                                  ? "Parsed · summary issue"
-                                  : d.quizError
-                                    ? "Parsed · quiz fallback"
-                                    : "Parsed & ready"}
+                            <Check className="size-3.5" />
+                            Save
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="shrink-0"
+                            onClick={() => setRenamingId(null)}
+                          >
+                            <X className="size-3.5" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex items-start gap-2">
+                          <CardTitle className="min-w-0 flex-1 truncate font-heading text-base">
+                            {d.fileName}
+                          </CardTitle>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="size-8 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+                            title="Rename"
+                            onClick={() => {
+                              setRenamingId(d.id);
+                              setRenameDraft(d.fileName);
+                            }}
+                          >
+                            <Pencil className="size-3.5" />
+                          </Button>
+                        </div>
+                      )}
+                      <CardDescription className="mt-2 flex flex-wrap gap-x-2 gap-y-1">
+                        <span>
+                          Uploaded{" "}
+                          {formatIsoDateLongEn(d.uploadedAt.slice(0, 10))}
+                        </span>
+                        {d.summary ? (
+                          <span className="text-primary/90">· Summary</span>
+                        ) : d.status === "ready" ? (
+                          <span>· No summary</span>
+                        ) : null}
+                        {d.quiz ? (
+                          <span className="text-primary/90">· Quiz</span>
+                        ) : null}
+                        {(mistakeCountByDoc.get(d.id) ?? 0) > 0 ? (
+                          <span>
+                            · {mistakeCountByDoc.get(d.id)} mistake
+                            {(mistakeCountByDoc.get(d.id) ?? 0) === 1
+                              ? ""
+                              : "s"}
                           </span>
-                        ) : d.status === "uploading" ||
-                          d.status === "analyzing" ? (
-                          <span className="ml-2 inline-flex items-center gap-1">
-                            <Loader2 className="size-3.5 animate-spin text-primary" />
-                            {d.analysisStep ?? "Working…"}
-                          </span>
-                        ) : d.status === "error" ? (
-                          <span className="ml-2 inline-flex items-center gap-1 text-destructive">
-                            <AlertTriangle className="size-3.5" />
-                            {errorStatusHeading(d)}
-                          </span>
+                        ) : null}
+                        {d.pageCount != null ? (
+                          <span>· {d.pageCount} pages</span>
                         ) : null}
                       </CardDescription>
                     </div>
-                    <div className="flex shrink-0 flex-col items-end gap-1">
-                      <Badge
-                        variant={
-                          d.status === "ready"
-                            ? d.summaryError ||
-                                d.quizError ||
-                                d.errorMessage ||
-                                d.extractTooShort
-                              ? "secondary"
-                              : "default"
-                            : d.status === "error"
-                              ? "destructive"
-                              : "secondary"
-                        }
-                        className="capitalize"
-                      >
-                        {d.status === "ready" &&
-                        (d.summaryError ||
-                          d.quizError ||
-                          d.errorMessage) &&
-                        !d.extractTooShort
-                          ? "ready · parse OK"
-                          : d.status}
-                      </Badge>
+                    <div className="flex shrink-0 flex-col items-end gap-1.5">
+                      <DocumentAnalysisBadge doc={d} />
                       {d.textTruncated ? (
-                        <Badge variant="outline" className="text-[10px]">
+                        <Badge variant="outline" className="text-[10px] font-normal">
                           Text truncated
                         </Badge>
                       ) : null}
                     </div>
                   </CardHeader>
                   <ParseSuccessBanner d={d} />
-                  <ExtractedTextPreviewSection d={d} />
+                  <details
+                    className="group"
+                    open={documents.length <= 4}
+                  >
+                    <summary className="cursor-pointer border-t border-border/50 bg-muted/15 px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+                      Extract &amp; technical details
+                    </summary>
+                    <ExtractedTextPreviewSection d={d} />
+                    <ParseDebugPanel d={d} />
+                  </details>
                   {d.status === "ready" && d.errorMessage ? (
                     <div className="border-t border-amber-300/80 bg-amber-50/70 px-4 py-3 dark:border-amber-800/50 dark:bg-amber-950/25">
                       <p className="text-sm font-medium text-amber-950 dark:text-amber-100">
@@ -599,7 +685,6 @@ export default function SubjectUploadPage() {
                       </p>
                     </div>
                   ) : null}
-                  <ParseDebugPanel d={d} />
                   {d.status === "ready" && d.summarySource === "openai" && d.summary ? (
                     <div className="border-t border-primary/20 bg-primary/5 px-4 py-2 text-center text-xs font-medium text-foreground">
                       Summary: generated from uploaded PDF content (OpenAI)
@@ -671,7 +756,8 @@ export default function SubjectUploadPage() {
                 </Card>
               </li>
             ))}
-          </ul>
+            </ul>
+          </ScrollArea>
         )}
       </div>
     </div>

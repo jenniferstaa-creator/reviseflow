@@ -101,6 +101,10 @@ export default function SubjectMistakesPage() {
                   From: {docName(m.documentId)}
                 </Badge>
               </div>
+              <p className="text-[10px] text-muted-foreground font-mono leading-relaxed">
+                Subject: {m.subjectId ?? subjectId} · Document: {m.documentId} ·
+                Question: {m.questionId}
+              </p>
               <div className="grid gap-2 rounded-lg bg-muted/40 p-3 sm:grid-cols-2">
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">

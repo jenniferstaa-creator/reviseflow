@@ -80,6 +80,11 @@ export interface MistakeRecord {
   createdAt: string;
 }
 
+export interface PlanPriorityTask {
+  label: string;
+  importance: "high" | "medium" | "low";
+}
+
 export interface DailyPlanDay {
   date: string;
   label: string;
@@ -87,19 +92,49 @@ export interface DailyPlanDay {
   focusConcepts: string[];
   minutesBudget: number;
   completed: boolean;
+  /** Last days before the exam: tighter recap and mistake-focused work. */
+  isSprintDay?: boolean;
+  /** Ordered by importance for quick scanning in Today / planner. */
+  priorityTasks?: PlanPriorityTask[];
 }
 
 export interface ExamConfig {
   name: string;
   date: string;
   hoursPerDay: number;
+  /** Whether the schedule was built with OpenAI or rule-based fallback. */
+  planSource?: "ai" | "heuristic";
+  planGeneratedAt?: string;
 }
 
-export interface SpacedRepetitionItem {
-  id: string;
-  conceptTag: string;
-  nextReviewLabel: string;
-  strength: number;
+/** Subject-level synthesis from all document summaries (no raw PDF text). */
+export interface SubjectAggregateAnalysis {
+  courseOverview: string;
+  topConcepts: string[];
+  repeatedThemes: string[];
+  weakestAreas: string[];
+  recommendedRevisionOrder: Array<{
+    documentId: string;
+    fileName: string;
+    rationale: string;
+  }>;
+  generatedAt: string;
+}
+
+export interface SubjectAnalysisMeta {
+  generatedAt: string;
+  /** Sorted ready document ids with summaries when this was produced. */
+  fingerprint: string;
+  source: "openai" | "heuristic";
+}
+
+/** Persisted SM-lite state per concept × document (keyed in `conceptReviewByKey`). */
+export interface ConceptReviewProgressState {
+  lastReviewedAt: string | null;
+  nextReviewAt: string;
+  intervalDays: number;
+  correctCount: number;
+  incorrectCount: number;
 }
 
 /** How study materials were produced (for migration + debugging). */
@@ -190,6 +225,13 @@ export interface SubjectWorkspace {
   mistakes: MistakeRecord[];
   exam: ExamConfig | null;
   dailyPlan: DailyPlanDay[];
+  /** Cross-document insights; refresh when PDFs or summaries change. */
+  subjectAnalysis: SubjectAggregateAnalysis | null;
+  subjectAnalysisMeta: SubjectAnalysisMeta | null;
+  /**
+   * Spaced-repetition progress keyed by `makeConceptReviewKey(documentId, conceptName)`.
+   */
+  conceptReviewByKey: Record<string, ConceptReviewProgressState>;
 }
 
 /** Root app state persisted to localStorage. */

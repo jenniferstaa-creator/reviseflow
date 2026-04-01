@@ -6,15 +6,12 @@ import type {
   ExamConfig,
   MistakeRecord,
   SubjectAccent,
+  SubjectAggregateAnalysis,
   SubjectIconId,
   SubjectWorkspace,
   StudyDocument,
 } from "@/data/types";
-import {
-  SAMPLE_MISTAKES,
-  buildMockDailyPlan,
-  guessErrorType,
-} from "@/data/mock-course";
+import { SAMPLE_MISTAKES, guessErrorType } from "@/data/mock-course";
 import {
   buildQuizFromExtractedText,
   buildTextPreview,
@@ -35,6 +32,15 @@ import {
   saveWorkspaceState,
   findSubject,
 } from "@/lib/workspace-storage";
+import {
+  applyExamSprintOverlay,
+  buildHeuristicDailyPlan,
+} from "@/lib/exam-plan-heuristic";
+import {
+  buildHeuristicSubjectAggregate,
+  subjectSummaryFingerprint,
+} from "@/lib/subject-insights";
+import { toLocalDateKey } from "@/lib/dates";
 
 const INITIAL: AppState = { version: 1, subjects: [] };
 
@@ -59,6 +65,8 @@ type WorkspaceContextValue = {
   addDocumentFromFile: (subjectId: string, file: File) => void;
   retryDocumentAnalysis: (subjectId: string, docId: string) => void;
   deleteDocument: (subjectId: string, docId: string) => void;
+  /** Rename display label only (does not change the original upload file on disk). */
+  renameDocument: (subjectId: string, docId: string, fileName: string) => void;
   selectDocument: (subjectId: string, docId: string | null) => void;
   addMistake: (
     subjectId: string,
@@ -77,11 +85,26 @@ type WorkspaceContextValue = {
   ) => void;
   clearMistakes: (subjectId: string) => void;
   loadSampleMistakes: (subjectId: string) => void;
-  saveExamPlan: (subjectId: string, config: ExamConfig) => void;
+  saveExamPlan: (
+    subjectId: string,
+    config: ExamConfig,
+    opts?: { subjectAnalysis?: SubjectAggregateAnalysis | null }
+  ) => Promise<void>;
+  /** Regenerate subject-level synthesis from document summaries (uses OpenAI when configured). */
+  refreshSubjectAnalysis: (
+    subjectId: string
+  ) => Promise<SubjectAggregateAnalysis | null>;
   toggleDayCompleted: (subjectId: string, date: string) => void;
   setPartialPlanProgress: (
     subjectId: string,
     completedDayCount: number
+  ) => void;
+  /** Update spaced-repetition state after a quiz check (correct / incorrect). */
+  recordConceptReview: (
+    subjectId: string,
+    documentId: string,
+    conceptName: string,
+    outcome: "correct" | "incorrect"
   ) => void;
 };
 
@@ -459,6 +482,20 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const renameDocument = React.useCallback(
+    (subjectId: string, docId: string, fileName: string) => {
+      const next = fileName.trim();
+      if (!next) return;
+      dispatch({
+        type: "UPDATE_DOCUMENT",
+        subjectId,
+        docId,
+        patch: { fileName: next },
+      });
+    },
+    []
+  );
+
   const selectDocument = React.useCallback(
     (subjectId: string, docId: string | null) => {
       dispatch({ type: "SELECT_DOCUMENT", subjectId, docId });
@@ -519,14 +556,148 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const saveExamPlan = React.useCallback(
-    (subjectId: string, config: ExamConfig) => {
-      const plan = buildMockDailyPlan(config.date, config.hoursPerDay);
-      dispatch({
-        type: "SAVE_EXAM_PLAN",
-        subjectId,
-        exam: config,
-        dailyPlan: plan,
-      });
+    async (
+      subjectId: string,
+      config: ExamConfig,
+      opts?: { subjectAnalysis?: SubjectAggregateAnalysis | null }
+    ) => {
+      const sub = findSubject(stateRef.current, subjectId);
+      if (!sub) return;
+      const startDate = toLocalDateKey(new Date());
+      const now = new Date().toISOString();
+      const analysisForPlan =
+        opts && "subjectAnalysis" in opts
+          ? opts.subjectAnalysis
+          : sub.subjectAnalysis;
+
+      try {
+        const res = await fetch("/api/plan-exam", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            exam: config,
+            startDate,
+            subjectName: sub.name,
+            documents: sub.documents,
+            mistakes: sub.mistakes,
+            subjectAnalysis: analysisForPlan ?? null,
+          }),
+        });
+        const data = (await res.json()) as {
+          ok?: boolean;
+          dailyPlan?: import("@/data/types").DailyPlanDay[];
+          source?: string;
+          error?: string;
+        };
+        if (!res.ok || !data.ok || !Array.isArray(data.dailyPlan)) {
+          throw new Error(
+            typeof data.error === "string" ? data.error : "Plan request failed"
+          );
+        }
+        const source = data.source === "ai" ? "ai" : "heuristic";
+        dispatch({
+          type: "SAVE_EXAM_PLAN",
+          subjectId,
+          exam: {
+            ...config,
+            planSource: source,
+            planGeneratedAt: now,
+          },
+          dailyPlan: data.dailyPlan,
+        });
+      } catch {
+        const plan = applyExamSprintOverlay(
+          buildHeuristicDailyPlan({
+            examDateIso: config.date,
+            hoursPerDay: config.hoursPerDay,
+            documents: sub.documents,
+            mistakes: sub.mistakes,
+            subjectAnalysis: analysisForPlan ?? null,
+          }),
+          config.date
+        );
+        dispatch({
+          type: "SAVE_EXAM_PLAN",
+          subjectId,
+          exam: {
+            ...config,
+            planSource: "heuristic",
+            planGeneratedAt: now,
+          },
+          dailyPlan: plan,
+        });
+      }
+    },
+    []
+  );
+
+  const refreshSubjectAnalysis = React.useCallback(
+    async (subjectId: string): Promise<SubjectAggregateAnalysis | null> => {
+      const sub = findSubject(stateRef.current, subjectId);
+      if (!sub) return null;
+      const fingerprint = subjectSummaryFingerprint(sub.documents);
+
+      const applyHeuristic = (): SubjectAggregateAnalysis => {
+        const analysis = buildHeuristicSubjectAggregate(
+          sub.name,
+          sub.documents,
+          sub.mistakes
+        );
+        dispatch({
+          type: "SET_SUBJECT_ANALYSIS",
+          subjectId,
+          analysis,
+          meta: {
+            generatedAt: analysis.generatedAt,
+            fingerprint,
+            source: "heuristic",
+          },
+        });
+        return analysis;
+      };
+
+      if (!fingerprint.length) {
+        dispatch({
+          type: "SET_SUBJECT_ANALYSIS",
+          subjectId,
+          analysis: null,
+          meta: null,
+        });
+        return null;
+      }
+
+      try {
+        const res = await fetch("/api/aggregate-subject", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            subjectName: sub.name,
+            documents: sub.documents,
+            mistakes: sub.mistakes,
+          }),
+        });
+        const data = (await res.json()) as {
+          ok?: boolean;
+          analysis?: SubjectAggregateAnalysis;
+          error?: string;
+        };
+        if (res.ok && data.ok && data.analysis) {
+          dispatch({
+            type: "SET_SUBJECT_ANALYSIS",
+            subjectId,
+            analysis: data.analysis,
+            meta: {
+              generatedAt: data.analysis.generatedAt,
+              fingerprint,
+              source: "openai",
+            },
+          });
+          return data.analysis;
+        }
+        return applyHeuristic();
+      } catch {
+        return applyHeuristic();
+      }
     },
     []
   );
@@ -549,6 +720,25 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const recordConceptReview = React.useCallback(
+    (
+      subjectId: string,
+      documentId: string,
+      conceptName: string,
+      outcome: "correct" | "incorrect"
+    ) => {
+      if (!conceptName.trim()) return;
+      dispatch({
+        type: "RECORD_CONCEPT_REVIEW",
+        subjectId,
+        documentId,
+        conceptName: conceptName.trim(),
+        outcome,
+      });
+    },
+    []
+  );
+
   const value = React.useMemo(
     () => ({
       hydrated,
@@ -561,14 +751,17 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       addDocumentFromFile,
       retryDocumentAnalysis,
       deleteDocument,
+      renameDocument,
       selectDocument,
       addMistake,
       removeMistakeForQuestion,
       clearMistakes,
       loadSampleMistakes,
       saveExamPlan,
+      refreshSubjectAnalysis,
       toggleDayCompleted,
       setPartialPlanProgress,
+      recordConceptReview,
     }),
     [
       hydrated,
@@ -580,14 +773,17 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       addDocumentFromFile,
       retryDocumentAnalysis,
       deleteDocument,
+      renameDocument,
       selectDocument,
       addMistake,
       removeMistakeForQuestion,
       clearMistakes,
       loadSampleMistakes,
       saveExamPlan,
+      refreshSubjectAnalysis,
       toggleDayCompleted,
       setPartialPlanProgress,
+      recordConceptReview,
     ]
   );
 

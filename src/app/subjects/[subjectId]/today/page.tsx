@@ -71,7 +71,34 @@ export default function SubjectTodayPage() {
           </p>
         ) : focus ? (
           <div className="space-y-4">
-            <p className="text-sm font-medium text-foreground">{focus.label}</p>
+            <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
+              {focus.label}
+              {focus.isSprintDay ? (
+                <Badge
+                  variant="outline"
+                  className="font-normal text-[10px] border-amber-500/50 text-amber-900 dark:text-amber-100"
+                >
+                  Final sprint day
+                </Badge>
+              ) : null}
+            </p>
+            {focus.priorityTasks && focus.priorityTasks.length > 0 ? (
+              <div className="rounded-lg border border-border/70 bg-muted/25 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Today’s priority tasks
+                </p>
+                <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-sm text-foreground/90">
+                  {focus.priorityTasks.slice(0, 5).map((p, i) => (
+                    <li key={`${p.label}-${i}`}>
+                      <span className="mr-1 text-xs font-medium text-muted-foreground">
+                        ({p.importance})
+                      </span>
+                      {p.label}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
             <ul className="list-disc space-y-2 pl-5 text-sm text-foreground/90">
               {focus.tasks.map((t) => (
                 <li key={t}>{t}</li>

@@ -5,8 +5,11 @@
 
 import type {
   AppState,
+  ConceptReviewProgressState,
   DocumentContentSource,
   QuizSource,
+  SubjectAggregateAnalysis,
+  SubjectAnalysisMeta,
   SubjectWorkspace,
   SummarySource,
 } from "@/data/types";
@@ -114,6 +117,12 @@ function migrateIfNeeded(state: AppState): AppState {
     selectedDocumentId: s.selectedDocumentId ?? null,
     exam: s.exam ?? null,
     dailyPlan: s.dailyPlan ?? [],
+    subjectAnalysis:
+      (s as SubjectWorkspaceCompat).subjectAnalysis ?? null,
+    subjectAnalysisMeta:
+      (s as SubjectWorkspaceCompat).subjectAnalysisMeta ?? null,
+    conceptReviewByKey:
+      (s as SubjectWorkspaceCompat).conceptReviewByKey ?? {},
     accent: s.accent ?? "teal",
     icon: s.icon ?? "book-open",
   }));
@@ -122,6 +131,12 @@ function migrateIfNeeded(state: AppState): AppState {
 }
 
 type MistakeRecordCompat = { documentId?: string };
+
+type SubjectWorkspaceCompat = {
+  subjectAnalysis?: SubjectAggregateAnalysis | null;
+  subjectAnalysisMeta?: SubjectAnalysisMeta | null;
+  conceptReviewByKey?: Record<string, ConceptReviewProgressState>;
+};
 
 type StudyDocumentCompat = {
   extractedText?: string;

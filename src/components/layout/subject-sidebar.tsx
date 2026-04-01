@@ -11,6 +11,7 @@ import {
   FileStack,
   FileUp,
   LayoutDashboard,
+  Layers,
   ListChecks,
   Menu,
   PanelTop,
@@ -40,6 +41,11 @@ function buildNavSections(base: string): NavSection[] {
       label: "Workspace",
       items: [
         { href: base, label: "Overview", icon: PanelTop },
+        {
+          href: `${base}#course-insights`,
+          label: "Course insights",
+          icon: Layers,
+        },
         { href: `${base}/upload`, label: "Files & upload", icon: FileUp },
       ],
     },

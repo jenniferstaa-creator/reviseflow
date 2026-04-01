@@ -14,7 +14,6 @@ import type {
   ErrorType,
   MistakeRecord,
   QuizContent,
-  SpacedRepetitionItem,
 } from "./types";
 import {
   formatPlanDayLabel,
@@ -207,33 +206,6 @@ export const MOCK_WEAK_TOPICS = [
   "Bullwhip effect",
   "Lean vs agile",
   "Safety stock",
-];
-
-export const MOCK_SPACED_REPETITION: SpacedRepetitionItem[] = [
-  {
-    id: "sr-1",
-    conceptTag: "Bullwhip effect",
-    nextReviewLabel: "1 day",
-    strength: 0.35,
-  },
-  {
-    id: "sr-2",
-    conceptTag: "Lean vs agile",
-    nextReviewLabel: "3 days",
-    strength: 0.55,
-  },
-  {
-    id: "sr-3",
-    conceptTag: "Safety stock",
-    nextReviewLabel: "7 days",
-    strength: 0.62,
-  },
-  {
-    id: "sr-4",
-    conceptTag: "Coordination / visibility",
-    nextReviewLabel: "14 days",
-    strength: 0.78,
-  },
 ];
 
 const PLAN_TASK_ROTATIONS = [

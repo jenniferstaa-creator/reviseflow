@@ -4,10 +4,18 @@ import type {
   ExamConfig,
   MistakeRecord,
   SubjectAccent,
+  SubjectAggregateAnalysis,
+  SubjectAnalysisMeta,
   SubjectIconId,
   SubjectWorkspace,
   StudyDocument,
 } from "@/data/types";
+import {
+  advanceConceptReview,
+  defaultConceptReviewProgress,
+  makeConceptReviewKey,
+  pruneConceptReviewKeysForDocument,
+} from "@/lib/concept-review-catalog";
 export type WorkspaceAction =
   | { type: "HYDRATE"; payload: AppState }
   | {
@@ -57,6 +65,19 @@ export type WorkspaceAction =
       type: "SET_PARTIAL_PLAN";
       subjectId: string;
       completedDayCount: number;
+    }
+  | {
+      type: "SET_SUBJECT_ANALYSIS";
+      subjectId: string;
+      analysis: SubjectAggregateAnalysis | null;
+      meta: SubjectAnalysisMeta | null;
+    }
+  | {
+      type: "RECORD_CONCEPT_REVIEW";
+      subjectId: string;
+      documentId: string;
+      conceptName: string;
+      outcome: "correct" | "incorrect";
     };
 
 function touch(now: string): Pick<SubjectWorkspace, "updatedAt"> {
@@ -91,6 +112,9 @@ export function workspaceReducer(
         mistakes: [],
         exam: null,
         dailyPlan: [],
+        subjectAnalysis: null,
+        subjectAnalysisMeta: null,
+        conceptReviewByKey: {},
       };
       return { ...state, subjects: [...state.subjects, subject] };
     }
@@ -164,6 +188,10 @@ export function workspaceReducer(
             documents: nextDocs,
             selectedDocumentId: nextSel,
             mistakes: s.mistakes.filter((m) => m.documentId !== action.docId),
+            conceptReviewByKey: pruneConceptReviewKeysForDocument(
+              s.conceptReviewByKey ?? {},
+              action.docId
+            ),
           };
         }),
       };
@@ -295,6 +323,44 @@ export function workspaceReducer(
               ...d,
               completed: idx < action.completedDayCount,
             })),
+          };
+        }),
+      };
+    }
+
+    case "SET_SUBJECT_ANALYSIS": {
+      return {
+        ...state,
+        subjects: state.subjects.map((s) =>
+          s.id === action.subjectId
+            ? {
+                ...s,
+                ...touch(now),
+                subjectAnalysis: action.analysis,
+                subjectAnalysisMeta: action.meta,
+              }
+            : s
+        ),
+      };
+    }
+
+    case "RECORD_CONCEPT_REVIEW": {
+      const clock = new Date();
+      const key = makeConceptReviewKey(
+        action.documentId,
+        action.conceptName
+      );
+      return {
+        ...state,
+        subjects: state.subjects.map((s) => {
+          if (s.id !== action.subjectId) return s;
+          const book = { ...(s.conceptReviewByKey ?? {}) };
+          const prev = book[key] ?? defaultConceptReviewProgress(clock);
+          book[key] = advanceConceptReview(prev, action.outcome, clock);
+          return {
+            ...s,
+            ...touch(now),
+            conceptReviewByKey: book,
           };
         }),
       };

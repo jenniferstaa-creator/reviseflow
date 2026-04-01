@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -7,8 +8,11 @@ import {
   CalendarDays,
   ClipboardList,
   FileStack,
+  Layers,
   ListChecks,
+  Loader2,
   Plus,
+  RefreshCw,
   Target,
 } from "lucide-react";
 import { useSubjectWorkspace } from "@/context/subject-workspace-context";
@@ -19,6 +23,7 @@ import { Progress } from "@/components/ui/progress";
 import { EmptyState } from "@/components/empty-state";
 import { SubjectIcon, accentRingClass } from "@/lib/subject-ui";
 import { formatIsoDateLongEn } from "@/lib/dates";
+import { getSubjectCourseStats } from "@/lib/subject-stats";
 import { cn } from "@/lib/utils";
 
 export default function SubjectOverviewPage() {
@@ -30,9 +35,29 @@ export default function SubjectOverviewPage() {
     dailyPlan,
     studyCompletionPercent,
     readyDocumentCount,
+    subjectAnalysis,
+    subjectAnalysisMeta,
+    subjectInsightsStale,
+    refreshSubjectAnalysis,
   } = useSubjectWorkspace();
 
   const base = `/subjects/${subjectId}`;
+  const [insightsBusy, setInsightsBusy] = React.useState(false);
+
+  const onRefreshInsights = async () => {
+    setInsightsBusy(true);
+    try {
+      await refreshSubjectAnalysis();
+    } finally {
+      setInsightsBusy(false);
+    }
+  };
+
+  const courseStats = React.useMemo(
+    () => getSubjectCourseStats(subject),
+    [subject]
+  );
+
   const recentDocs = [...documents]
     .sort(
       (a, b) =>
@@ -83,35 +108,198 @@ export default function SubjectOverviewPage() {
             </div>
           </div>
         </div>
-        <div className="grid w-full gap-3 sm:grid-cols-3 md:w-auto md:max-w-md">
-          <div className="rounded-xl border border-border/80 bg-card p-4 shadow-sm">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              PDFs
-            </p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">
-              {documents.length}
-            </p>
-            <p className="text-xs text-muted-foreground">{readyDocumentCount} ready</p>
-          </div>
-          <div className="rounded-xl border border-border/80 bg-card p-4 shadow-sm">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Mistakes
-            </p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">
-              {mistakes.length}
-            </p>
-            <p className="text-xs text-muted-foreground">in notebook</p>
-          </div>
-          <div className="rounded-xl border border-border/80 bg-card p-4 shadow-sm sm:col-span-1">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Plan
-            </p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">
-              {studyCompletionPercent}%
-            </p>
-            <Progress value={studyCompletionPercent} className="mt-2 h-1" />
+        <div className="w-full space-y-3 md:max-w-3xl">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Course at a glance
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="rounded-xl border border-border/80 bg-card p-4 shadow-sm">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                PDFs uploaded
+              </p>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">
+                {courseStats.pdfCount}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Files in this subject
+              </p>
+            </div>
+            <div className="rounded-xl border border-border/80 bg-card p-4 shadow-sm">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Analyzed
+              </p>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">
+                {courseStats.analyzedReadyCount}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {courseStats.analyzedWithMaterialsCount} with summary or quiz
+              </p>
+            </div>
+            <div className="rounded-xl border border-border/80 bg-card p-4 shadow-sm">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Quiz questions
+              </p>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">
+                {courseStats.totalQuizQuestions}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Across all documents
+              </p>
+            </div>
+            <div className="rounded-xl border border-border/80 bg-card p-4 shadow-sm">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Mistakes
+              </p>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">
+                {courseStats.totalMistakes}
+              </p>
+              <p className="text-xs text-muted-foreground">In your notebook</p>
+            </div>
+            <div className="rounded-xl border border-border/80 bg-card p-4 shadow-sm">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Weak topics
+              </p>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">
+                {courseStats.weakTopicCount}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Distinct tags &amp; insight areas
+              </p>
+            </div>
+            <div className="rounded-xl border border-border/80 bg-card p-4 shadow-sm">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Plan progress
+              </p>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">
+                {studyCompletionPercent}%
+              </p>
+              <Progress value={studyCompletionPercent} className="mt-2 h-1" />
+            </div>
           </div>
         </div>
+      </div>
+
+      <div id="course-insights">
+      <SectionCard
+        title="Course insights (subject level)"
+        description="Synthesised from all PDF summaries and your mistakes — not raw files. Use this for the big picture; open Summary for a single document."
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            {subjectAnalysisMeta ? (
+              <Badge variant="secondary" className="text-[10px] font-normal">
+                {subjectAnalysisMeta.source === "openai" ? "AI synthesis" : "Rule-based merge"}
+              </Badge>
+            ) : null}
+            <button
+              type="button"
+              disabled={insightsBusy || readyDocumentCount === 0}
+              onClick={() => void onRefreshInsights()}
+              className={cn(
+                "inline-flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs font-medium hover:bg-muted/80 disabled:opacity-50"
+              )}
+            >
+              {insightsBusy ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" />
+              )}
+              Refresh
+            </button>
+          </div>
+        }
+      >
+        {subjectInsightsStale ? (
+          <p className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-950 dark:text-amber-100/90">
+            Your PDFs changed since the last run. Refresh to update this section.
+          </p>
+        ) : null}
+        {!subjectAnalysis ? (
+          <div className="rounded-xl border border-dashed border-border/80 bg-muted/15 px-4 py-6 text-sm text-muted-foreground">
+            <p className="flex items-center gap-2 font-medium text-foreground">
+              <Layers className="size-4 text-primary" />
+              No course insights yet
+            </p>
+            <p className="mt-2 leading-relaxed">
+              {readyDocumentCount === 0
+                ? "Upload at least one PDF and wait until its summary is ready, then refresh."
+                : "Tap Refresh to merge every ready summary into a course overview, shared themes, and a recommended chapter order."}
+            </p>
+            <button
+              type="button"
+              disabled={insightsBusy || readyDocumentCount === 0}
+              onClick={() => void onRefreshInsights()}
+              className={cn(
+                "mt-4 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-accent/50 disabled:opacity-50"
+              )}
+            >
+              {insightsBusy ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              Generate course insights
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Course overview
+              </p>
+              <div className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-border/60 bg-muted/10 p-3 text-sm leading-relaxed text-foreground/90 whitespace-pre-wrap">
+                {subjectAnalysis.courseOverview}
+              </div>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Top concepts
+                </p>
+                <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-foreground/90">
+                  {subjectAnalysis.topConcepts.slice(0, 10).map((c) => (
+                    <li key={c}>{c}</li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Repeated themes
+                </p>
+                <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-foreground/90">
+                  {subjectAnalysis.repeatedThemes.slice(0, 10).map((c) => (
+                    <li key={c}>{c}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Weakest areas to prioritise
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {subjectAnalysis.weakestAreas.map((c) => (
+                  <Badge key={c} variant="outline" className="font-normal">
+                    {c}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Recommended revision order (documents)
+              </p>
+              <ol className="mt-2 list-decimal space-y-2 pl-4 text-sm text-foreground/90">
+                {subjectAnalysis.recommendedRevisionOrder.map((r) => (
+                  <li key={r.documentId}>
+                    <span className="font-medium">{r.fileName}</span> —{" "}
+                    {r.rationale}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </div>
+        )}
+      </SectionCard>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -175,7 +363,7 @@ export default function SubjectOverviewPage() {
                 href: `${base}/summary`,
                 label: "Summary",
                 icon: BookOpen,
-                sub: "Per active document",
+                sub: "One PDF at a time (picker)",
               },
               {
                 href: `${base}/quiz`,

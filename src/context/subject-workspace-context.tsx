@@ -6,9 +6,12 @@ import type {
   ExamConfig,
   MistakeRecord,
   StudyDocument,
+  SubjectAnalysisMeta,
+  SubjectAggregateAnalysis,
   SubjectWorkspace,
 } from "@/data/types";
 import { useWorkspace } from "@/context/workspace-context";
+import { subjectSummaryFingerprint } from "@/lib/subject-insights";
 
 export type SubjectWorkspaceContextValue = {
   subjectId: string;
@@ -19,6 +22,10 @@ export type SubjectWorkspaceContextValue = {
   mistakes: MistakeRecord[];
   exam: ExamConfig | null;
   dailyPlan: SubjectWorkspace["dailyPlan"];
+  subjectAnalysis: SubjectAggregateAnalysis | null;
+  subjectAnalysisMeta: SubjectAnalysisMeta | null;
+  /** True when PDFs/summaries changed since the last subject-level analysis run. */
+  subjectInsightsStale: boolean;
   studyCompletionPercent: number;
   revisionStreakDays: number;
   readyDocumentCount: number;
@@ -26,6 +33,7 @@ export type SubjectWorkspaceContextValue = {
   addDocumentFromFile: (file: File) => void;
   retryDocumentAnalysis: (docId: string) => void;
   deleteDocument: (docId: string) => void;
+  renameDocument: (docId: string, fileName: string) => void;
   addMistake: (
     documentId: string,
     m: Omit<
@@ -38,9 +46,18 @@ export type SubjectWorkspaceContextValue = {
   removeMistakeForQuestion: (documentId: string, questionId: string) => void;
   clearMistakes: () => void;
   loadSampleMistakes: () => void;
-  saveExamPlan: (config: ExamConfig) => void;
+  saveExamPlan: (
+    config: ExamConfig,
+    opts?: { subjectAnalysis?: SubjectAggregateAnalysis | null }
+  ) => Promise<void>;
+  refreshSubjectAnalysis: () => Promise<SubjectAggregateAnalysis | null>;
   toggleDayCompleted: (date: string) => void;
   setPartialPlanProgress: (completedDayCount: number) => void;
+  recordConceptReview: (
+    documentId: string,
+    conceptName: string,
+    outcome: "correct" | "incorrect"
+  ) => void;
 };
 
 const SubjectWorkspaceContext =
@@ -99,6 +116,12 @@ function SubjectWorkspaceInner({
     (d) => d.status === "ready"
   ).length;
 
+  const fingerprint = subjectSummaryFingerprint(subject.documents);
+  const subjectInsightsStale = Boolean(
+    subject.subjectAnalysisMeta &&
+      fingerprint !== subject.subjectAnalysisMeta.fingerprint
+  );
+
   const value: SubjectWorkspaceContextValue = {
     subjectId,
     subject,
@@ -108,6 +131,9 @@ function SubjectWorkspaceInner({
     mistakes: subject.mistakes,
     exam: subject.exam,
     dailyPlan: subject.dailyPlan,
+    subjectAnalysis: subject.subjectAnalysis,
+    subjectAnalysisMeta: subject.subjectAnalysisMeta,
+    subjectInsightsStale,
     studyCompletionPercent,
     revisionStreakDays: 5,
     readyDocumentCount,
@@ -116,14 +142,20 @@ function SubjectWorkspaceInner({
     retryDocumentAnalysis: (docId) =>
       ws.retryDocumentAnalysis(subjectId, docId),
     deleteDocument: (docId) => ws.deleteDocument(subjectId, docId),
+    renameDocument: (docId, fileName) =>
+      ws.renameDocument(subjectId, docId, fileName),
     addMistake: (documentId, m) => ws.addMistake(subjectId, documentId, m),
     removeMistakeForQuestion: (documentId, questionId) =>
       ws.removeMistakeForQuestion(subjectId, documentId, questionId),
     clearMistakes: () => ws.clearMistakes(subjectId),
     loadSampleMistakes: () => ws.loadSampleMistakes(subjectId),
-    saveExamPlan: (config) => ws.saveExamPlan(subjectId, config),
+    saveExamPlan: (config, opts) =>
+      ws.saveExamPlan(subjectId, config, opts),
+    refreshSubjectAnalysis: () => ws.refreshSubjectAnalysis(subjectId),
     toggleDayCompleted: (date) => ws.toggleDayCompleted(subjectId, date),
     setPartialPlanProgress: (n) => ws.setPartialPlanProgress(subjectId, n),
+    recordConceptReview: (documentId, conceptName, outcome) =>
+      ws.recordConceptReview(subjectId, documentId, conceptName, outcome),
   };
 
   return (

@@ -59,6 +59,7 @@ function SubjectQuizInner() {
     mistakes,
     addMistake,
     removeMistakeForQuestion,
+    recordConceptReview,
   } = useSubjectWorkspace();
   const base = `/subjects/${subjectId}`;
   const quiz = selectedDocument?.quiz ?? null;
@@ -196,15 +197,9 @@ function SubjectQuizInner() {
     );
   }
 
-  const runCheckMcq = (q: QuizQuestionMCQ) => {
-    const sel = mcqAnswers[q.id];
-    if (!sel) {
-      setCheckHints((h) => ({
-        ...h,
-        [q.id]: "Select an option, then check your answer.",
-      }));
-      return;
-    }
+  /** Multiple choice: evaluate immediately when the learner picks an option. */
+  const handleMcqPick = (q: QuizQuestionMCQ, sel: string) => {
+    setMcqAnswers((s) => ({ ...s, [q.id]: sel }));
     setCheckHints((h) => {
       const next = { ...h };
       delete next[q.id];
@@ -225,23 +220,7 @@ function SubjectQuizInner() {
         errorType: guessErrorType(sel, q.correctAnswer, q.conceptTag),
       });
     }
-  };
-
-  const setMcqChoice = (questionId: string, value: string) => {
-    setMcqAnswers((s) => ({ ...s, [questionId]: value }));
-    if (checked[questionId]) {
-      setChecked((c) => {
-        const next = { ...c };
-        delete next[questionId];
-        return next;
-      });
-    }
-    setCheckHints((h) => {
-      if (!h[questionId]) return h;
-      const next = { ...h };
-      delete next[questionId];
-      return next;
-    });
+    recordConceptReview(docId, q.conceptTag, correct ? "correct" : "incorrect");
   };
 
   const setShortResponse = (questionId: string, value: string) => {
@@ -291,6 +270,11 @@ function SubjectQuizInner() {
         errorType: guessErrorType(trimmed, q.correctAnswer, q.conceptTag),
       });
     }
+    recordConceptReview(
+      docId,
+      q.conceptTag,
+      correct ? "correct" : "incorrect"
+    );
   };
 
   return (
@@ -396,7 +380,13 @@ function SubjectQuizInner() {
       </div>
 
       <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
-        <p className="font-medium text-foreground">Quiz source</p>
+        <p className="font-medium text-foreground">How this quiz works</p>
+        <p className="mt-1 leading-relaxed text-muted-foreground">
+          Multiple choice checks as soon as you select an option. Short answers use
+          “Check answer” when you’re ready. Wrong responses are saved to your
+          mistake notebook with this subject and document id.
+        </p>
+        <p className="mt-2 font-medium text-foreground">Quiz source</p>
         <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
           <dt>Origin</dt>
           <dd className="capitalize">
@@ -441,10 +431,10 @@ function SubjectQuizInner() {
                 indexLabel={`${idx + 1} / ${mcqList.length}`}
                 q={q}
                 value={mcqAnswers[q.id]}
-                onChange={(v) => setMcqChoice(q.id, v)}
+                onPickOption={(v) => handleMcqPick(q, v)}
                 checked={checked[q.id]}
                 checkHint={checkHints[q.id]}
-                onCheck={() => runCheckMcq(q)}
+                notebookHref={`${base}/mistakes`}
               />
             ))
           )}
@@ -466,6 +456,7 @@ function SubjectQuizInner() {
                 checked={checked[q.id]}
                 checkHint={checkHints[q.id]}
                 onCheck={() => runCheckShort(q)}
+                notebookHref={`${base}/mistakes`}
               />
             ))
           )}
@@ -556,18 +547,18 @@ function McqBlock({
   q,
   indexLabel,
   value,
-  onChange,
+  onPickOption,
   checked,
   checkHint,
-  onCheck,
+  notebookHref,
 }: {
   q: QuizQuestionMCQ;
   indexLabel: string;
   value: string | undefined;
-  onChange: (v: string) => void;
+  onPickOption: (v: string) => void;
   checked: { correct: boolean } | undefined;
   checkHint: string | undefined;
-  onCheck: () => void;
+  notebookHref: string;
 }) {
   return (
     <article className="rounded-xl border border-border/70 bg-card p-4 shadow-sm">
@@ -608,7 +599,7 @@ function McqBlock({
                   name={q.id}
                   className="mt-1 size-3.5 shrink-0 border-muted-foreground/40"
                   checked={selected}
-                  onChange={() => onChange(opt)}
+                  onChange={() => onPickOption(opt)}
                   aria-checked={selected}
                 />
                 <span className="leading-relaxed">{opt}</span>
@@ -622,17 +613,17 @@ function McqBlock({
           {checkHint}
         </p>
       ) : null}
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" onClick={onCheck}>
-          Check answer
-        </Button>
-      </div>
+      <p className="mt-3 text-[11px] text-muted-foreground leading-relaxed">
+        Selecting an option checks your answer right away and updates your
+        mistake notebook when needed.
+      </p>
       {checked ? (
         <FeedbackPanel
           correct={checked.correct}
           correctLabel="Correct answer"
           correctText={q.correctAnswer}
           explanation={q.explanation}
+          notebookHref={notebookHref}
         />
       ) : null}
     </article>
@@ -647,6 +638,7 @@ function ShortBlock({
   checked,
   checkHint,
   onCheck,
+  notebookHref,
 }: {
   q: QuizQuestionShort;
   indexLabel: string;
@@ -655,6 +647,7 @@ function ShortBlock({
   checked: { correct: boolean } | undefined;
   checkHint: string | undefined;
   onCheck: () => void;
+  notebookHref: string;
 }) {
   return (
     <article className="rounded-xl border border-border/70 bg-card p-4 shadow-sm">
@@ -692,6 +685,7 @@ function ShortBlock({
           correctLabel="Model answer"
           correctText={q.correctAnswer}
           explanation={q.explanation}
+          notebookHref={notebookHref}
         />
       ) : null}
     </article>
@@ -703,11 +697,13 @@ function FeedbackPanel({
   correctLabel,
   correctText,
   explanation,
+  notebookHref,
 }: {
   correct: boolean;
   correctLabel: string;
   correctText: string;
   explanation: string;
+  notebookHref: string;
 }) {
   return (
     <div
@@ -749,6 +745,21 @@ function FeedbackPanel({
           {explanation}
         </p>
       </div>
+      {!correct ? (
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          <span className="font-medium text-foreground">
+            Saved to your mistake notebook
+          </span>
+          {" — "}
+          <Link
+            href={notebookHref}
+            className="font-medium text-primary underline-offset-4 hover:underline"
+          >
+            Review entries
+          </Link>
+          .
+        </p>
+      ) : null}
     </div>
   );
 }
